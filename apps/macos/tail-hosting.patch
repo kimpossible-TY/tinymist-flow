@@ -1,0 +1,65 @@
+--- a/bin/tail-hosting
++++ b/bin/tail-hosting
+@@ -41,6 +41,17 @@
+ def load_registry():
+     global DNS, PORT, PROJECT, LABEL
+     data=json.loads(REGISTRY.read_text())
++    # Flow app lifecycle adapter: the registry owns ingress; Flow owns project settings.
++    managers={s.get('managerBinary') for s in data.get('services',[]) if s.get('managerBinary')}
++    for manager in managers:
++        profiles=json.loads(require([manager,'--profiles']))['profiles']
++        by_id={p['id']:p for p in profiles}
++        for s in data['services']:
++            if s.get('managerBinary')!=manager: continue
++            p=by_id.get(s['id'])
++            if p is None: raise ValueError('Flow profile missing: '+s['id'])
++            s.update(projectRoot=p['root'],entrypoint=p['entry'],fontPaths=p['fonts'],launchAgentLabel=p['label'])
++            s['backend']={'host':'127.0.0.1','port':p['port']}
+     if data.get('schemaVersion') != 1 or not isinstance(data.get('services'), list): raise ValueError('unsupported registry schema')
+     ids=set(); backend_ports=set(); ingresses=set(); focus_files=set()
+     for s in data['services']:
+@@ -149,7 +160,7 @@
+         saved=json.loads(cache.read_text())
+         if time.time()-saved['checkedAt'] < (300 if saved.get('state')=='ok' else 30) and saved.get('fingerprint') == current_fingerprint: return saved
+     except Exception: pass
+-    binary=pathlib.Path('/Users/taeyoung/Developer/tinymist/target/release/tinymist')
++    binary=pathlib.Path(s.get('enginePath','/Users/taeyoung/Developer/tinymist/target/release/tinymist'))
+     if not binary.exists(): return {'state':'unknown','checkedAt':time.time()}
+     # Compile to a temporary target so this check never writes into the user's project.
+     fd,out=tempfile.mkstemp(suffix='.pdf',dir=RUNTIME); os.close(fd); output=pathlib.Path(out)
+@@ -221,7 +232,9 @@
+     return existing is not None
+ 
+ def typst_agent(s):
+-    project=pathlib.Path(s['projectRoot']); binary=pathlib.Path('/Users/taeyoung/Developer/tinymist/target/release/tinymist')
++    if s.get('managerBinary'):
++        return plistlib.loads(require([s['managerBinary'],'--agent-plist',s['id']]).encode())
++    project=pathlib.Path(s['projectRoot']); binary=pathlib.Path(s.get('enginePath','/Users/taeyoung/Developer/tinymist/target/release/tinymist'))
+     if not binary.exists(): raise RuntimeError(f'Tinymist binary missing: {binary}')
+     font=project/'fonts'; packages=HOME/'Library/Application Support/typst/packages'
+     if not project.joinpath(s.get('entrypoint','main.typ')).is_file(): raise RuntimeError('PDE main.typ missing')
+@@ -240,7 +253,7 @@
+     mapping_ok=check_allocation(s)
+     # Validate the actual document before reserving its stable port or changing launchd/Serve.
+     fd,out=tempfile.mkstemp(suffix='.pdf',dir=RUNTIME); os.close(fd); preflight=pathlib.Path(out)
+-    result=run(['/Users/taeyoung/Developer/tinymist/target/release/tinymist','compile','main.typ',str(preflight),'--root','.','--font-path','fonts','--package-path',str(HOME/'Library/Application Support/typst/packages')],timeout=120,cwd=PROJECT)
++    result=run([s.get('enginePath','/Users/taeyoung/Developer/tinymist/target/release/tinymist'),'compile',s.get('entrypoint','main.typ'),str(preflight),'--root','.','--font-path','fonts','--package-path',str(HOME/'Library/Application Support/typst/packages')],timeout=120,cwd=PROJECT)
+     valid=bool(result and result.returncode==0 and preflight.exists() and preflight.stat().st_size>0)
+     preflight.unlink(missing_ok=True)
+     if not valid: raise RuntimeError('PDE compile preflight failed; inspect compiler output before installation')
+@@ -271,6 +284,15 @@
+     s=service(data,sid)
+     if sid!='typst-pde': raise RuntimeError('observed services are read-only')
+     path=target_plist(LABEL); desired=RUNTIME/'typst-pde.desired'
++    if s.get('managerBinary'):
++        check_allocation(s)
++        require([s['managerBinary'],'--control',action,sid],timeout=30)
++        s['desiredState']='stopped' if action=='stop' else 'running'
++        atomic_write(REGISTRY,data)
++        if action=='stop': desired.unlink(missing_ok=True)
++        else: desired.write_text('running\n')
++        report(data)
++        return
+     if action=='stop':
+         desired.unlink(missing_ok=True)
+         s['desiredState']='stopped'; atomic_write(REGISTRY,data)
