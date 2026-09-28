@@ -1,10 +1,22 @@
 use futures::{SinkExt, StreamExt};
 use reflexo_typst::debug_loc::DocumentPosition;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use tinymist_std::error::IgnoreLogging;
 use tokio::sync::{broadcast, mpsc};
 
 use super::{editor::EditorActorRequest, render::RenderActorRequest};
+use crate::focus::{FocusRequest, FocusStore};
 use crate::{ViewerWindowStateMessage, WsMessage, actor::editor::DocToSrcJumpResolveRequest};
+
+type FocusConnection = (
+    FocusStoreHandle,
+    Arc<parking_lot::RwLock<Option<Arc<dyn crate::CompileView>>>>,
+);
+type FocusStoreHandle = Arc<FocusStore>;
+static NEXT_VIEWER_ID: AtomicU64 = AtomicU64::new(1);
 
 // pub type CursorPosition = DocumentPosition;
 pub type SrcToDocJumpInfo = DocumentPosition;
@@ -40,6 +52,8 @@ pub struct WebviewActor<'a, C> {
     broadcast_sender: broadcast::Sender<WebviewActorRequest>,
     editor_sender: mpsc::UnboundedSender<EditorActorRequest>,
     render_sender: broadcast::Sender<RenderActorRequest>,
+    focus: Option<FocusConnection>,
+    viewer_id: u64,
 }
 
 pub struct Channels {
@@ -66,6 +80,7 @@ where
         mailbox: broadcast::Receiver<WebviewActorRequest>,
         editor_sender: mpsc::UnboundedSender<EditorActorRequest>,
         render_sender: broadcast::Sender<RenderActorRequest>,
+        focus: Option<FocusConnection>,
     ) -> Self {
         Self {
             webview_websocket_conn: websocket_conn,
@@ -74,7 +89,47 @@ where
             broadcast_sender,
             editor_sender,
             render_sender,
+            focus,
+            viewer_id: NEXT_VIEWER_ID.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    async fn record_focus(&mut self, payload: &str) {
+        let Some((store, view)) = self.focus.as_ref() else {
+            return;
+        };
+        let request = if payload.len() <= 4096 {
+            serde_json::from_str::<FocusRequest>(payload)
+                .ok()
+                .filter(FocusRequest::is_valid)
+        } else {
+            None
+        };
+        let response = if let Some(request) = request {
+            let store = store.clone();
+            let view = view.read().clone();
+            let viewer_id = self.viewer_id;
+            match tokio::task::spawn_blocking(move || store.record(request, view, viewer_id)).await
+            {
+                Ok(Ok(snapshot)) => serde_json::json!({
+                    "status": snapshot.status,
+                    "sequence": snapshot.sequence,
+                    "page": snapshot.position.map(|p| p.page_no),
+                    "filepath": snapshot.source.as_ref().map(|s| &s.filepath),
+                    "line": snapshot.source.as_ref().map(|s| s.line),
+                }),
+                result => {
+                    log::warn!("could not persist preview focus: {result:?}");
+                    serde_json::json!({"status": "error"})
+                }
+            }
+        } else {
+            serde_json::json!({"status": "invalid"})
+        };
+        self.webview_websocket_conn
+            .send(WsMessage::Binary(format!("focus,{response}").into()))
+            .await
+            .log_error("SendPreviewFocus");
     }
 
     pub async fn run(mut self) {
@@ -141,12 +196,12 @@ where
                         let pos = DocumentPosition { page_no, x, y };
 
                         self.broadcast_sender.send(WebviewActorRequest::ViewportPosition(pos)).log_error("WebViewActor");
-                    } else if msg.starts_with("src-point") {
-                        let path = msg.split(' ').nth(1).unwrap();
-                        let path = serde_json::from_str(path);
-                        if let Ok(path) = path {
+                    } else if let Some(path) = msg.strip_prefix("src-point ") {
+                        if self.focus.is_some() {
+                            self.record_focus(path).await;
+                        } else if let Ok(path) = serde_json::from_str(path) {
                             self.render_sender.send(RenderActorRequest::WebviewResolveFrameLoc(path)).log_error("WebViewActor");
-                        };
+                        }
                     } else if let Some(state) = msg.strip_prefix("viewer-window-state ") {
                         if let Ok(state) = serde_json::from_str::<ViewerWindowStateMessage>(state) {
                             self.editor_sender.send(EditorActorRequest::ViewerWindowState(state)).log_error("WebViewActor");

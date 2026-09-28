@@ -44,6 +44,17 @@ pub async fn preview_main(args: PreviewCliArgs) -> Result<()> {
     }
     let verse = args.compile.resolve()?;
     let previewer = PreviewBuilder::new(config);
+    let previewer = match std::env::var_os("TINYMIST_PREVIEW_FOCUS_FILE") {
+        Some(path) => {
+            if !matches!(preview_target, ExportTarget::Paged) {
+                bail!("preview focus sharing requires paged output");
+            }
+            previewer
+                .with_focus_file(path.into())
+                .map_err(anyhow::Error::from)?
+        }
+        None => previewer,
+    };
 
     let (service, handle) = {
         let preview_state = ProjectPreviewState::default();

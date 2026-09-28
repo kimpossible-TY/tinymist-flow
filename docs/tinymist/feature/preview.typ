@@ -90,6 +90,36 @@ value is `["--data-plane-host=127.0.0.1:23635", "--invert-colors=auto"]`. Exampl
 }
 ```
 
+== Viewing a preview over Tailnet <tailnet-preview>
+
+For a mobile review workflow, the preview can listen on the development host's Tailscale MagicDNS name while edits continue on that host. From this repository, start it with:
+
+```bash
+scripts/tailnet-preview.sh /absolute/path/to/main.typ
+```
+
+The launcher prints a stable URL such as `http://my-mac.example-tailnet.ts.net:23625/`. Open that URL in Safari on an iPhone or iPad connected to the same Tailnet with MagicDNS enabled. The preview watches the source files on the development host, so edits written there appear in the mobile browser without running an editor on the mobile device.
+
+The launcher discovers the name from `tailscale status --json`, binds only the browser-facing data plane to the address resolved by that name, and keeps the control plane on loopback. The following environment variables can override its defaults:
+
+- `TINYMIST_BIN`: Tinymist executable to run.
+- `TINYMIST_TAILNET_HOST`: exact MagicDNS hostname, skipping CLI discovery.
+- `TINYMIST_PREVIEW_PORT`: browser-facing port; the default is `23625`.
+- `TAILSCALE_BIN`: Tailscale executable; the default is `tailscale`.
+
+Do not replace the MagicDNS name with `0.0.0.0`. A wildcard listener also exposes the preview on other network interfaces and does not match Tinymist's fixed WebSocket Origin check. The preview server does not authenticate Tailnet peers; use Tailscale ACLs or grants if the document must not be visible to every peer in the Tailnet.
+
+=== HTTPS reverse proxy
+
+When a trusted reverse proxy terminates HTTPS, bind the data plane to loopback and configure its exact public origin with `TINYMIST_ALLOWED_ORIGINS`. For example:
+
+```bash
+TINYMIST_ALLOWED_ORIGINS=https://my-mac.example-tailnet.ts.net:23625 \
+  tinymist preview main.typ --data-plane-host=127.0.0.1:23625 --no-open
+```
+
+This variable accepts a comma-separated list of exact canonical HTTPS origins, with no path, credentials, query, fragment or wildcard. It does not publish a server or enable Funnel. A separate Tailnet-only Tailscale Serve mapping must proxy this port. A macOS background LaunchAgent also needs permission to access a project in the Documents folder.
+
 == CLI Integration
 
 ```bash
@@ -150,3 +180,19 @@ The only two abstracted theme kinds are supported: `light` and `dark`. You can u
 ```typ
 #let preview-theme = preview-args.at("theme", default: "light")
 ```
+
+== Bounded continuous scrolling
+
+For long documents on mobile browsers, use `--partial-rendering=true` with document preview mode. Partial SVG preview requests visible pages plus one neighboring page on each side. Offscreen pages retain their dimensions as placeholders and do not allocate fallback canvases. Scroll requests are coalesced; document updates remain ordered. Shared font definitions and the document model remain in memory, so this does not bound total memory independently of document size.
+
+When a source edit changes the paged document, document preview follows the changed location after rendering. It compares page contents and uses source-to-document mapping to place the edited text in view when available; otherwise it moves to the first changed page. Initial loading and reconnecting do not trigger a jump. A jump across a long document is immediate so the browser does not render every intermediate page. If you are actively scrolling when an update arrives, a *Jump to change* button appears instead of moving the page under your finger. Updates that do not change any visible page do not move the preview.
+
+When building a custom frontend, run `node scripts/build.mjs build:preview` before rebuilding the CLI. The workspace uses the local assets crate so the resulting frontend is embedded in the executable.
+
+== Share a selected location with a local assistant
+
+Set `TINYMIST_PREVIEW_FOCUS_FILE` to an absolute local JSON path when starting the standalone CLI. The service creates a waiting record on startup. After the document finishes rendering, tap a sentence, equation, or component. A status line acknowledges the saved page and source location. The record contains the latest explicit tap, its time and compiler revision, and up to 17 surrounding source lines capped at 8000 characters. File permissions are owner-only on Unix.
+
+An assistant with local filesystem access can read this record when you ask about the selected passage. Source lines and columns in the record are one-based. Scrolling does not replace the selection, and the latest tap across connected viewers wins. A changed render revision or unmapped position clears the previous source selection and reports the condition. The source excerpt comes from the compilation snapshot; consumers should check its age and compare it with the current source before editing.
+
+This channel supplies context for a subsequent request. It does not automatically start an assistant response or capture the mobile screen. Without the environment variable, preview retains its existing editor jump behavior.

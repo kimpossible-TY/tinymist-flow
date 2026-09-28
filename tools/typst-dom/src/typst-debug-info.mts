@@ -137,6 +137,10 @@ export function installEditorJumpToHandler(
     let mayPageElem: [SourceMappingType, Element, string] | undefined = undefined;
 
     while (elem) {
+      if (windowElem.onPreviewFocus && elem.classList.contains("typst-page-inner")) {
+        mayPageElem = [SourceMappingType.Page, elem, ""];
+        break;
+      }
       mayPageElem = castToSourceMappingElement(elem);
       if (mayPageElem && mayPageElem[0] === SourceMappingType.Page) {
         break;
@@ -194,7 +198,11 @@ export function installEditorJumpToHandler(
       return;
     }
     console.log("frameLoc", frameLoc);
-    windowElem.typstWebsocket.send(`src-point ${JSON.stringify(frameLoc)}`);
+    if (windowElem.onPreviewFocus) {
+      windowElem.onPreviewFocus(frameLoc);
+    } else {
+      windowElem.typstWebsocket.send(`src-point ${JSON.stringify(frameLoc)}`);
+    }
 
     const triggerWindow = document.body || document.firstElementChild;
     const basePos = triggerWindow.getBoundingClientRect();

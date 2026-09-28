@@ -36,6 +36,11 @@ export function setupDrag() {
     containerElement.style.cursor = "grab";
   };
   const mouseDownHandler = function (e: MouseEvent) {
+    // Touch browsers synthesize mouse events after a long press. Leave those
+    // gestures to native scrolling, text selection, and the copy menu.
+    if (e.button !== 0 || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) {
+      return;
+    }
     lastPos = {
       // Get the current mouse position
       x: e.clientX,
@@ -43,7 +48,7 @@ export function setupDrag() {
     };
     if (!goodDrag(containerElement)) return;
     const elementUnderMouse = e.target as HTMLElement | null;
-    if (elementUnderMouse !== null && elementUnderMouse.classList.contains("tsel")) {
+    if (elementUnderMouse?.closest(".tsel")) {
       return;
     }
     e.preventDefault();

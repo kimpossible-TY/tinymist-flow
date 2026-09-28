@@ -222,65 +222,55 @@ export function provideSvgDoc<
     }
 
     private fetchSvgDataByDocMode() {
-      const { revScale, left, top, width, height } = this.statSvgFromDom();
-
-      let patchStr: string;
-      // with 1px padding to avoid edge error
-      if (this.partialRendering) {
-        /// Adjust top and bottom
-        const ch = this.hookedElem.firstElementChild?.children;
-        let topEstimate = top - 1,
-          bottomEstimate = top + height + 1;
-        if (ch) {
-          const pages = Array.from(ch).filter((x) => x.classList.contains("typst-page"));
-          let minTop = 1e33,
-            maxBottom = -1e33,
-            accumulatedHeight = 0;
-          for (const page of pages) {
-            const pageHeight = Number.parseFloat(page.getAttribute("data-page-height")!);
-            const translateY = Number.parseFloat(page.getAttribute("data-y")!);
-            if (translateY + pageHeight > topEstimate) {
-              minTop = Math.min(minTop, accumulatedHeight);
-            }
-            if (translateY < bottomEstimate) {
-              maxBottom = Math.max(maxBottom, accumulatedHeight + pageHeight);
-            }
-            accumulatedHeight += pageHeight;
-          }
-
-          if (pages.length != 0) {
-            topEstimate = minTop;
-            bottomEstimate = maxBottom;
-          } else {
-            topEstimate = 0;
-            bottomEstimate = 1e33;
-          }
-        }
-        // translate
-        patchStr = this.kModule.render_in_window(
-          // lo.x, lo.y
-          left - 1,
-          topEstimate,
-          // hi.x, hi.y
-          left + width + 1,
-          bottomEstimate,
-        );
-        console.log(
-          "render_in_window with partial rendering enabled window",
-          revScale,
-          left,
-          top,
-          width,
-          height,
-          ", patch scale",
-          patchStr.length,
-        );
-      } else {
-        console.log("render_in_window with partial rendering disabled", 0, 0, 1e33, 1e33);
-        patchStr = this.kModule.render_in_window(0, 0, 1e33, 1e33);
+      if (!this.partialRendering) {
+        return this.kModule.render_in_window(0, 0, 1e33, 1e33);
       }
 
-      return patchStr;
+      // Use page metadata even on the first frame: missing DOM must never
+      // widen a partial request to the entire document.
+      const pages = this.kModule.retrievePagesInfo();
+      const scroller = this.hookedElem.parentElement!;
+      const maxWidth = Math.max(1, ...pages.map((page) => page.width));
+      const scale = Math.max(
+        1e-6,
+        ((this.cachedDOMState.width || scroller.clientWidth || maxWidth) / maxWidth) *
+          this.currentScaleRatio,
+      );
+      const root = this.hookedElem.firstElementChild;
+      const top = root
+        ? Math.max(
+            0,
+            (scroller.getBoundingClientRect().top - root.getBoundingClientRect().top) / scale,
+          )
+        : Math.max(0, scroller.scrollTop / scale);
+      // The document element may be hundreds of pages tall. Its clientHeight
+      // is not the viewport height.
+      const bottom = top + Math.max(1, scroller.clientHeight) / scale;
+      const gap = (this.isContentPreview ? 6 : 5) / scale;
+      let visualY = 0;
+      let first = -1;
+      let last = -1;
+      for (let i = 0; i < pages.length; i++) {
+        const end = visualY + pages[i].height;
+        if (end >= top && visualY <= bottom) {
+          if (first < 0) first = i;
+          last = i;
+        }
+        visualY = end + (i + 1 < pages.length ? 2 * gap : 0);
+      }
+      if (first < 0) first = last = Math.max(0, pages.length - 1);
+      first = Math.max(0, first - 1);
+      last = Math.min(pages.length - 1, last + 1);
+      let lo = 0;
+      let hi = 0;
+      for (let i = 0; i < pages.length; i++) {
+        if (i < first) lo += pages[i].height;
+        if (i <= last) hi += pages[i].height;
+      }
+      // Offscreen pages remain renderer-owned dummy groups with their size;
+      // SVG diff patching removes their previous content without disturbing
+      // page positions, links, or the renderer's reuse bookkeeping.
+      return this.kModule.render_in_window(0, lo + 0.01, maxWidth, Math.max(lo + 0.02, hi - 0.01));
     }
 
     private rescaleSvgOn(svg: SVGElement) {
@@ -502,7 +492,7 @@ export function provideSvgDoc<
         return;
       }
 
-      // During panel resize, only the auto-fit scale should change 
+      // During panel resize, only the auto-fit scale should change
       // while the user-driven scale ratio does not. Keep the
       // same viewport-top anchor for the whole resize burst instead of
       // resampling after each intermediate frame to avoid accumulating jitter.
@@ -601,7 +591,11 @@ export function provideSvgDoc<
 
     private decorateSvgElement(svg: SVGElement, mode: PreviewMode) {
       const container = this.cachedDOMState;
-      const kShouldMixinCanvas = this.previewMode === PreviewMode.Doc && this.shouldMixinCanvas();
+      // Partial SVG rendering must leave offscreen pages as placeholders.
+      // Rasterizing every dummy page defeats virtualization and allocates
+      // hundreds of canvas backing stores on mobile browsers.
+      const kShouldMixinCanvas =
+        this.previewMode === PreviewMode.Doc && !this.partialRendering && this.shouldMixinCanvas();
 
       // the <rect> could only have integer width and height
       // so we scale it by 100 to make it more accurate
@@ -898,38 +892,6 @@ export function provideSvgDoc<
 
       /// Early rescale
       this.rescaleSvgOn(svg);
-    }
-
-    private get docWidth() {
-      const svg = this.hookedElem.firstElementChild!;
-
-      if (svg) {
-        let svgWidth = Number.parseFloat(
-          svg.getAttribute("data-width")! || svg.getAttribute("width")! || "1",
-        );
-        if (svgWidth < 1e-5) {
-          svgWidth = 1;
-        }
-        return svgWidth;
-      }
-
-      return this.kModule.docWidth;
-    }
-
-    private statSvgFromDom() {
-      const { width: containerWidth, boundingRect: containerBRect } = this.cachedDOMState;
-      // scale derived from svg width and container with.
-      // svg.setAttribute("data-width", `${newWidth}`);
-
-      const computedRevScale = containerWidth ? this.docWidth / containerWidth : 1;
-      // respect current scale ratio
-      const revScale = computedRevScale / this.currentScaleRatio;
-      const left = (this.hookedElem.parentElement!.scrollLeft - containerBRect.left) * revScale;
-      const top = (this.hookedElem.parentElement!.scrollTop - containerBRect.top) * revScale;
-      const width = this.windowElem.clientWidth * revScale;
-      const height = this.windowElem.clientHeight * revScale;
-
-      return { revScale, left, top, width, height };
     }
   };
 }

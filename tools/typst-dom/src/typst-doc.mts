@@ -56,6 +56,8 @@ export interface TypstDomWindowElement extends HTMLElement {
   handleTypstLocation(elem: Element, page: number, x: number, y: number): void;
   documents: any[];
   typstWebsocket: Sendable;
+  /// Optional handler for sharing an explicit selection with a local assistant.
+  onPreviewFocus?: (position: { page_no: number; x: number; y: number }) => void;
 }
 
 export interface TypstDomHookedElement extends HTMLElement {
@@ -117,6 +119,8 @@ export class TypstDocumentContext<O = any> {
   vpTimeout: any = undefined;
   /// sampled by last render time.
   sampledRenderTime: number = 0;
+  /// Called after the document DOM has settled for the queued updates.
+  onDidRender?: () => void;
   /// page to partial render
   partialRenderPage: number = 0;
   /// outline data
@@ -183,6 +187,8 @@ export class TypstDocumentContext<O = any> {
   }
 
   dispose() {
+    if (this.vpTimeout !== undefined) clearTimeout(this.vpTimeout);
+    this.patchQueue.length = 0;
     const disposeList = this.disposeList;
     this.disposeList = [];
     disposeList.forEach((x) => x());
@@ -442,13 +448,13 @@ export class TypstDocumentContext<O = any> {
       } catch (e) {
         console.error(e);
         this.isRendering = false;
-        this.postprocessChanges();
+        this.postprocessChanges(false);
       }
     };
     requestAnimationFrame(doUpdate);
   }
 
-  private postprocessChanges() {
+  private postprocessChanges(renderSucceeded = true) {
     // case RenderMode.Svg: {
     // const docRoot = this.hookedElem.firstElementChild as SVGElement;
     // if (docRoot) {
@@ -464,6 +470,7 @@ export class TypstDocumentContext<O = any> {
         x.textContent = `${this.kModule.retrievePagesInfo().length}`;
       });
     }
+    if (renderSucceeded) this.onDidRender?.();
   }
 
   addChangement(change: [string, string]) {
@@ -473,6 +480,10 @@ export class TypstDocumentContext<O = any> {
 
     const pushChange = () => {
       this.vpTimeout = undefined;
+      // Keep document deltas in order, but only retain the newest viewport.
+      if (change[0] === "viewport-change") {
+        this.patchQueue = this.patchQueue.filter((item) => item[0] !== "viewport-change");
+      }
       this.patchQueue.push(change);
       this.triggerUpdate();
     };
@@ -483,7 +494,7 @@ export class TypstDocumentContext<O = any> {
 
     if (change[0] === "viewport-change" && this.isRendering) {
       // delay viewport change a bit
-      this.vpTimeout = setTimeout(pushChange, this.sampledRenderTime || 100);
+      this.vpTimeout = setTimeout(pushChange, Math.min(100, Math.max(16, this.sampledRenderTime)));
     } else {
       pushChange();
     }

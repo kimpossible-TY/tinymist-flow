@@ -13,7 +13,7 @@ import renderModule from "@myriaddreamin/typst-ts-renderer/pkg/typst_ts_renderer
 // import { RenderSession as RenderSession2 } from "@myriaddreamin/typst-ts-renderer/pkg/wasm-pack-shim.mjs";
 import { RenderSession } from "@myriaddreamin/typst.ts/dist/esm/renderer.mjs";
 import { WebSocketSubject, webSocket } from "rxjs/webSocket";
-import { Subject, Subscription, buffer, debounceTime, fromEvent, tap } from "rxjs";
+import { Subject, Subscription, buffer, debounceTime, auditTime, fromEvent, tap } from "rxjs";
 import { handleHtmlPreviewFrame } from "./html-preview";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
@@ -45,6 +45,22 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
   let disposed = false;
   let $ws: WebSocketSubject<ArrayBuffer> | undefined = undefined;
   const subsribes: Subscription[] = [];
+  let queueChangedLocation: ((location: [number, number, number]) => void) | undefined;
+  let clearChangedLocation: (() => void) | undefined;
+  let focusRevision: string | undefined;
+  let pendingFocusRevision: string | undefined;
+  let focusStatus: HTMLDivElement | undefined;
+  const korean = navigator.language.startsWith("ko");
+  const showFocusStatus = (ko: string, en: string) => {
+    if (!focusStatus) {
+      focusStatus = document.createElement("div");
+      focusStatus.className = "typst-focus-status";
+      focusStatus.setAttribute("role", "status");
+      focusStatus.setAttribute("aria-live", "polite");
+      document.body.appendChild(focusStatus);
+    }
+    focusStatus.textContent = korean ? ko : en;
+  };
 
   function createSvgDocument(kModule: RenderSession) {
     const hookedElem = document.getElementById("typst-app")! as TypstDomHookedElement;
@@ -69,14 +85,105 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
       },
     });
 
+    if (previewMode === PreviewMode.Doc && !isContentPreview) {
+      let pendingChange: [number, number, number] | undefined;
+      let lastChange: [number, number, number] | undefined;
+      let lastUserGesture = -Infinity;
+      const changeButton = document.createElement("button");
+      changeButton.type = "button";
+      changeButton.className = "typst-change-jump";
+      changeButton.textContent = navigator.language.startsWith("ko")
+        ? "변경 위치로"
+        : "Jump to change";
+      changeButton.hidden = true;
+      document.body.appendChild(changeButton);
+
+      const jumpToChange = ([page, , y]: [number, number, number]) => {
+        const rect = hookedElem.querySelector<SVGRectElement>(
+          `.typst-page-inner[data-page-number="${page - 1}"]`,
+        );
+        if (!rect) return;
+        const pageHeight = Number.parseFloat(rect.getAttribute("data-page-height") || "0");
+        const renderedRect = rect.getBoundingClientRect();
+        const pageTop =
+          renderedRect.top - resizeTarget.getBoundingClientRect().top + resizeTarget.scrollTop;
+        const innerY =
+          pageHeight > 0
+            ? (Math.min(Math.max(y, 0), pageHeight) * renderedRect.height) / pageHeight
+            : 0;
+        // An instant jump avoids animating through hundreds of virtual pages.
+        resizeTarget.scrollTo({
+          top: Math.max(0, pageTop + innerY - resizeTarget.clientHeight * 0.35),
+          behavior: "instant",
+        });
+        svgDoc.addViewportChange();
+      };
+
+      const showChangeButton = () => {
+        changeButton.hidden = false;
+      };
+      changeButton.addEventListener("click", () => {
+        if (lastChange) jumpToChange(lastChange);
+        changeButton.hidden = true;
+      });
+
+      const markUserGesture = () => {
+        lastUserGesture = performance.now();
+      };
+      resizeTarget.addEventListener("pointerdown", markUserGesture, { passive: true });
+      resizeTarget.addEventListener("touchmove", markUserGesture, { passive: true });
+      resizeTarget.addEventListener("wheel", markUserGesture, { passive: true });
+      document.addEventListener("keydown", markUserGesture);
+
+      queueChangedLocation = (location) => {
+        pendingChange = location;
+      };
+      clearChangedLocation = () => {
+        pendingChange = undefined;
+        lastChange = undefined;
+        changeButton.hidden = true;
+      };
+      svgDoc.impl.onDidRender = () => {
+        if (!pendingChange) return;
+        lastChange = pendingChange;
+        pendingChange = undefined;
+        if (performance.now() - lastUserGesture < 2500) {
+          showChangeButton();
+        } else {
+          jumpToChange(lastChange);
+          changeButton.hidden = true;
+        }
+      };
+      svgDoc.impl.disposeList.push(() => {
+        changeButton.remove();
+        resizeTarget.removeEventListener("pointerdown", markUserGesture);
+        resizeTarget.removeEventListener("touchmove", markUserGesture);
+        resizeTarget.removeEventListener("wheel", markUserGesture);
+        document.removeEventListener("keydown", markUserGesture);
+        queueChangedLocation = undefined;
+        clearChangedLocation = undefined;
+      });
+    }
+
+    const previousOnDidRender = svgDoc.impl.onDidRender;
+    svgDoc.impl.onDidRender = () => {
+      focusRevision = pendingFocusRevision;
+      previousOnDidRender?.();
+    };
+    svgDoc.impl.disposeList.push(() => {
+      windowElem.onPreviewFocus = undefined;
+      focusStatus?.remove();
+      focusStatus = undefined;
+    });
+
     // drag (panal resizing) -> rescaling
     // window.onresize = () => svgDoc.rescale();
     subsribes.push(fromEvent(window, "resize").subscribe(() => svgDoc.addViewportChange()));
 
     if (!isContentPreview) {
       subsribes.push(
-        fromEvent(resizeTarget, "scroll")
-          .pipe(debounceTime(500))
+        fromEvent(resizeTarget, "scroll", { passive: true })
+          .pipe(auditTime(80))
           .subscribe(() => svgDoc.addViewportChange()),
       );
     }
@@ -213,16 +320,16 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
           }
           break;
         case "j":
-          resizeTarget.scrollBy({ top: + scrollDelta, behavior: "instant" });
+          resizeTarget.scrollBy({ top: +scrollDelta, behavior: "instant" });
           break;
         case "k":
-          resizeTarget.scrollBy({ top: - scrollDelta, behavior: "instant" });
+          resizeTarget.scrollBy({ top: -scrollDelta, behavior: "instant" });
           break;
         case "h":
-          resizeTarget.scrollBy({ top: - scrollDelta * 10, behavior: "smooth" });
+          resizeTarget.scrollBy({ top: -scrollDelta * 10, behavior: "smooth" });
           break;
         case "l":
-          resizeTarget.scrollBy({ top: + scrollDelta * 10, behavior: "smooth" });
+          resizeTarget.scrollBy({ top: +scrollDelta * 10, behavior: "smooth" });
           break;
         case "?":
           blurInput();
@@ -267,12 +374,21 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
           console.log("WebSocket connection opened", sock);
           windowElem.typstWebsocket = sock as any;
           svgDoc.reset();
+          clearChangedLocation?.();
+          focusRevision = pendingFocusRevision = undefined;
+          windowElem.onPreviewFocus = undefined;
           windowElem.typstWebsocket.send("current");
         },
       },
       closeObserver: {
         next: (e) => {
           console.log("WebSocket connection closed", e);
+          focusRevision = pendingFocusRevision = undefined;
+          if (focusStatus)
+            showFocusStatus(
+              "연결 끊김 · 다시 연결한 뒤 탭해 주세요",
+              "Disconnected · reconnect, then tap again",
+            );
           $ws?.unsubscribe();
           if (!disposed) {
             setTimeout(() => setupSocket(svgDoc), 1000);
@@ -336,6 +452,54 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
         messageData.slice(message_idx + 1),
       ];
       console.log("recv", message[0], messageData.length);
+      if (message[0] === "focus-enabled") {
+        showFocusStatus(
+          "Codex에 위치 공유 · 본문을 탭하세요",
+          "Share a location with Codex · tap the document",
+        );
+        windowElem.onPreviewFocus = (position) => {
+          if (!focusRevision || svgDoc.impl.isRendering || svgDoc.impl.patchQueue.length) {
+            showFocusStatus(
+              "문서 갱신 중 · 잠시 후 다시 탭해 주세요",
+              "Document updating · tap again shortly",
+            );
+            return;
+          }
+          showFocusStatus("선택한 위치 저장 중…", "Saving selected location…");
+          windowElem.typstWebsocket.send(
+            `src-point ${JSON.stringify({ ...position, revision: focusRevision })}`,
+          );
+        };
+        return;
+      }
+      if (message[0] === "focus-revision") {
+        pendingFocusRevision = dec.decode(message[1] as Uint8Array);
+        focusRevision = undefined;
+        return;
+      }
+      if (message[0] === "focus") {
+        const result = JSON.parse(dec.decode(message[1] as Uint8Array));
+        if (result.status === "selected") {
+          const name = result.filepath.split(/[\\/]/).pop();
+          showFocusStatus(
+            `Codex용 위치 저장됨 · ${result.page}쪽 · ${name}:${result.line}`,
+            `Saved for Codex · p. ${result.page} · ${name}:${result.line}`,
+          );
+        } else if (result.status === "unmapped") {
+          showFocusStatus(
+            `${result.page}쪽 위치만 저장됨 · 글자를 탭하면 소스도 연결됩니다`,
+            `Page ${result.page} location saved · tap text to link its source`,
+          );
+        } else if (result.status === "stale" || result.status === "not_ready") {
+          showFocusStatus("문서가 갱신됐습니다 · 다시 탭해 주세요", "Document changed · tap again");
+        } else {
+          showFocusStatus(
+            "위치 저장 실패 · 다시 탭해 주세요",
+            "Could not save location · tap again",
+          );
+        }
+        return;
+      }
       // console.log(message[0], message[1].length);
       if (isContentPreview) {
         // whether to scroll to the content preview when user updates document
@@ -354,6 +518,18 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
         ) {
           return;
         }
+      }
+
+      if (message[0] === "change") {
+        const location = dec
+          .decode(message[1] as Uint8Array)
+          .trim()
+          .split(/\s+/)
+          .map(Number);
+        if (location.length === 3 && location.every(Number.isFinite) && location[0] >= 1) {
+          queueChangedLocation?.(location as [number, number, number]);
+        }
+        return;
       }
 
       if (message[0] === "jump" || message[0] === "viewport") {

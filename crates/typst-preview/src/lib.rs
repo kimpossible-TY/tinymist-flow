@@ -3,6 +3,7 @@
 
 mod actor;
 mod debug_loc;
+mod focus;
 mod outline;
 pub mod protocol;
 
@@ -10,6 +11,7 @@ pub use crate::actor::editor::{
     CompileStatus, ControlPlaneMessage, ControlPlaneResponse, ControlPlaneRx, ControlPlaneTx,
     PanelScrollByPositionRequest,
 };
+pub use crate::focus::PreviewSourceContext;
 pub use crate::outline::Outline;
 
 use std::sync::{Arc, OnceLock};
@@ -172,6 +174,11 @@ impl Previewer {
                         .await
                         .log_error("SendPartialRendering");
                 }
+                if h.focus_store.is_some() {
+                    conn.send(WsMessage::Binary("focus-enabled,true".into()))
+                        .await
+                        .log_error("SendFocusEnabled");
+                }
                 if !h.invert_colors.is_empty() {
                     conn.send(WsMessage::Binary(
                         format!("invert-colors,{}", h.invert_colors).into(),
@@ -188,6 +195,9 @@ impl Previewer {
                     h.webview_tx.subscribe(),
                     h.editor_tx.clone(),
                     h.renderer_tx.clone(),
+                    h.focus_store
+                        .clone()
+                        .map(|store| (store, h.doc_sender.clone())),
                 );
                 match h.format {
                     ExportTarget::Paged => {
@@ -197,6 +207,7 @@ impl Previewer {
                             h.editor_tx.clone(),
                             svg.0,
                             h.webview_tx,
+                            h.focus_store.is_some(),
                         );
                         tokio::spawn(render_actor.run());
                         let outline_render_actor = actor::render::OutlineRenderActor::new(
@@ -273,6 +284,7 @@ type BroadcastChannel<T> = (broadcast::Sender<T>, broadcast::Receiver<T>);
 
 pub struct PreviewBuilder {
     config: PreviewConfig,
+    focus_store: Option<Arc<focus::FocusStore>>,
     shutdown_tx: Option<mpsc::Sender<()>>,
     renderer_mailbox: BroadcastChannel<RenderActorRequest>,
     editor_conn: MpScChannel<EditorActorRequest>,
@@ -286,6 +298,7 @@ impl PreviewBuilder {
     pub fn new(config: PreviewConfig) -> Self {
         Self {
             config,
+            focus_store: None,
             shutdown_tx: None,
             renderer_mailbox: broadcast::channel(1024),
             editor_conn: mpsc::unbounded_channel(),
@@ -298,6 +311,12 @@ impl PreviewBuilder {
     pub fn with_shutdown_tx(mut self, shutdown_tx: mpsc::Sender<()>) -> Self {
         self.shutdown_tx = Some(shutdown_tx);
         self
+    }
+
+    /// Persist explicit preview selections for a local assistant to read.
+    pub fn with_focus_file(mut self, path: PathBuf) -> std::io::Result<Self> {
+        self.focus_store = Some(Arc::new(focus::FocusStore::new(path)?));
+        Ok(self)
     }
 
     pub fn compile_watcher(&self, task_id: String) -> &Arc<CompileWatcher> {
@@ -315,6 +334,7 @@ impl PreviewBuilder {
     pub async fn build<T: EditorServer>(self, conn: ControlPlaneTx, server: Arc<T>) -> Previewer {
         let PreviewBuilder {
             config,
+            focus_store,
             shutdown_tx,
             renderer_mailbox,
             editor_conn: (editor_tx, editor_rx),
@@ -342,6 +362,7 @@ impl PreviewBuilder {
         // Delayed data plane binding
         let data_plane = DataPlane {
             format: config.format,
+            focus_store,
             span_interner: span_interner.clone(),
             webview_tx: webview_tx.clone(),
             editor_tx: editor_tx.clone(),
@@ -508,6 +529,20 @@ pub struct ViewerWindowStateMessage {
 }
 
 pub trait CompileView: Send + Sync {
+    /// Identify the compiler snapshot used by rendered document coordinates.
+    fn revision(&self) -> String {
+        String::new()
+    }
+
+    /// Resolve an explicit preview selection against this source snapshot.
+    fn preview_source_context(&self, _pos: &DocumentPosition) -> Option<PreviewSourceContext> {
+        None
+    }
+
+    /// Allow a concrete preview view to compare its source snapshot with the
+    /// preceding one without exposing compiler-specific types to this crate.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     /// Get the compiled document.
     fn doc(&self) -> Option<TypstDocument>;
     /// Get the compile status.
@@ -533,6 +568,12 @@ pub trait CompileView: Send + Sync {
 
     /// Resolve the document position.
     fn resolve_document_position(&self, _by: Location) -> Vec<PagedPosition> {
+        vec![]
+    }
+
+    /// Resolve the source edit that produced this compilation in the new
+    /// document. A visual page comparison remains the fallback.
+    fn changed_document_positions(&self, _previous: &dyn CompileView) -> Vec<PagedPosition> {
         vec![]
     }
 
@@ -599,6 +640,7 @@ impl CompileWatcher {
 #[derive(Clone)]
 struct DataPlane {
     format: ExportTarget,
+    focus_store: Option<Arc<focus::FocusStore>>,
     span_interner: SpanInterner,
     webview_tx: broadcast::Sender<WebviewActorRequest>,
     editor_tx: mpsc::UnboundedSender<EditorActorRequest>,

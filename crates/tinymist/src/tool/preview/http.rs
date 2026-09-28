@@ -63,9 +63,10 @@ pub async fn make_http_server(
                 // http / websocket server towards a legitimate frontend/html client.
                 // This requires additional protection that may be added in the future.
                 let origin_header = req.headers().get("Origin");
-                if origin_header
-                    .is_some_and(|h| !is_valid_origin(h, &static_file_addr, addr.port()))
-                {
+                if origin_header.is_some_and(|h| {
+                    !is_valid_origin(h, &static_file_addr, addr.port())
+                        && !is_allowed_proxy_origin(h)
+                }) {
                     anyhow::bail!(
                         "Connection with unexpected `Origin` header. Closing connection."
                     );
@@ -168,6 +169,28 @@ pub async fn make_http_server(
     }
 }
 
+fn is_allowed_proxy_origin(origin: &HeaderValue) -> bool {
+    // Exact HTTPS origins for trusted reverse proxies; never accept wildcards.
+    let Ok(origin) = origin.to_str() else {
+        return false;
+    };
+    let allowed = std::env::var("TINYMIST_ALLOWED_ORIGINS").unwrap_or_default();
+    is_allowed_proxy_origin_impl(origin, &allowed.split(',').collect::<Vec<_>>())
+}
+
+fn is_allowed_proxy_origin_impl(origin: &str, allowed: &[&str]) -> bool {
+    let Ok(url) = Url::parse(origin) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.origin().ascii_serialization() == origin
+        && allowed.iter().any(|candidate| candidate.trim() == origin)
+}
+
 fn is_valid_origin(h: &HeaderValue, static_file_addr: &str, expected_port: u16) -> bool {
     static GITPOD_ID_AND_HOST: LazyLock<Option<(String, String)>> = LazyLock::new(|| {
         let workspace_id = std::env::var("GITPOD_WORKSPACE_ID").ok();
@@ -257,7 +280,13 @@ mod tests {
     use super::*;
 
     fn check_origin(origin: &'static str, static_file_addr: &str, port: u16) -> bool {
-        is_valid_origin(&HeaderValue::from_static(origin), static_file_addr, port)
+        is_valid_origin_impl(
+            &HeaderValue::from_static(origin),
+            static_file_addr,
+            port,
+            &None,
+            &None,
+        )
     }
 
     #[test]
@@ -292,6 +321,20 @@ mod tests {
         assert!(!check_origin("http://huh.io:42", "localhost:0", 42));
         assert!(!check_origin("http://huh.io", "localhost:42", 42));
         assert!(!check_origin("https://huh.io", "localhost:42", 42));
+    }
+
+    #[test]
+    fn test_exact_configured_https_origin() {
+        let allowed = ["https://preview.example.ts.net:23625"];
+        assert!(is_allowed_proxy_origin_impl(allowed[0], &allowed));
+        assert!(!is_allowed_proxy_origin_impl(
+            "https://evil.example.ts.net:23625",
+            &allowed
+        ));
+        assert!(!is_allowed_proxy_origin_impl(
+            "https://preview.example.ts.net:23625/path",
+            &allowed
+        ));
     }
 
     #[test]

@@ -93,6 +93,41 @@ pub struct PreviewCompileView {
 }
 
 impl tinymist_preview::CompileView for PreviewCompileView {
+    fn revision(&self) -> String {
+        self.art.world().revision().get().to_string()
+    }
+
+    fn preview_source_context(
+        &self,
+        pos: &reflexo::debug_loc::DocumentPosition,
+    ) -> Option<tinymist_preview::PreviewSourceContext> {
+        let (span, _) = self.resolve_frame_loc(pos)?;
+        let location = self.resolve_span(span.span, Some(span.offset))?;
+        let (line, column) = location.start?;
+        let source = self.art.world().source(span.span.id()?).ok()?;
+        let start = line.saturating_sub(8);
+        let excerpt = source
+            .text()
+            .lines()
+            .skip(start)
+            .take(17)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let excerpt_truncated = excerpt.chars().count() > 8000;
+        Some(tinymist_preview::PreviewSourceContext {
+            filepath: location.filepath,
+            line: line + 1,
+            column: column + 1,
+            excerpt_start_line: start + 1,
+            excerpt: excerpt.chars().take(8000).collect(),
+            excerpt_truncated,
+        })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn doc(&self) -> Option<TypstDocument> {
         self.art.doc.clone()
     }
@@ -174,6 +209,52 @@ impl tinymist_preview::CompileView for PreviewCompileView {
         };
 
         jump_from_cursor(doc, &source, cursor)
+    }
+
+    fn changed_document_positions(
+        &self,
+        previous: &dyn tinymist_preview::CompileView,
+    ) -> Vec<Position> {
+        let Some(previous) = previous.as_any().downcast_ref::<Self>() else {
+            return vec![];
+        };
+        let Some(document) = self.doc() else {
+            return vec![];
+        };
+        let world = self.art.world();
+        let previous_world = previous.art.world();
+
+        for file_id in self.art.depended_files().iter().copied() {
+            let (Ok(source), Ok(previous_source)) =
+                (world.source(file_id), previous_world.source(file_id))
+            else {
+                continue;
+            };
+            let current = source.text();
+            let old = previous_source.text();
+            if current == old {
+                continue;
+            }
+
+            let changed_at = current
+                .as_bytes()
+                .iter()
+                .zip(old.as_bytes())
+                .take_while(|(a, b)| a == b)
+                .count();
+            // A new token may begin exactly at the changed byte. Search just
+            // beyond it so source-to-document mapping can find its text span.
+            let end = current.len().min(changed_at.saturating_add(256));
+            for cursor in changed_at..=end {
+                if current.is_char_boundary(cursor) {
+                    let positions = jump_from_cursor(&document, &source, cursor);
+                    if !positions.is_empty() {
+                        return positions;
+                    }
+                }
+            }
+        }
+        vec![]
     }
 
     fn resolve_span(&self, span: Span, offset: Option<usize>) -> Option<DocToSrcJumpInfo> {

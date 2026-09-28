@@ -1,10 +1,15 @@
 use std::ops::Range;
 use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+};
 
 use reflexo_typst::debug_loc::{DocumentPosition, LspPosition, SourceLocation, SourceSpanOffset};
 use reflexo_vec2svg::IncrSvgDocServer;
 use tinymist_std::typst::TypstDocument;
 use tokio::sync::{broadcast, mpsc};
+use typst::layout::{Frame, FrameItem};
 
 use super::{editor::EditorActorRequest, webview::WebviewActorRequest};
 use crate::debug_loc::SpanInterner;
@@ -40,6 +45,9 @@ pub struct RenderActor {
     editor_conn_sender: mpsc::UnboundedSender<EditorActorRequest>,
     svg_sender: mpsc::UnboundedSender<Vec<u8>>,
     webview_sender: broadcast::Sender<WebviewActorRequest>,
+    previous_view: Option<Arc<dyn CompileView>>,
+    previous_page_hashes: Option<Vec<u64>>,
+    focus_enabled: bool,
 }
 
 impl RenderActor {
@@ -49,6 +57,7 @@ impl RenderActor {
         editor_conn_sender: mpsc::UnboundedSender<EditorActorRequest>,
         svg_sender: mpsc::UnboundedSender<Vec<u8>>,
         webview_sender: broadcast::Sender<WebviewActorRequest>,
+        focus_enabled: bool,
     ) -> Self {
         Self {
             mailbox,
@@ -57,6 +66,9 @@ impl RenderActor {
             editor_conn_sender,
             svg_sender,
             webview_sender,
+            previous_view: None,
+            previous_page_hashes: None,
+            focus_enabled,
         }
     }
 
@@ -98,9 +110,11 @@ impl RenderActor {
     pub async fn run(mut self) {
         loop {
             let mut has_full_render = false;
+            let mut has_incremental_render = false;
             log::debug!("RenderActor: waiting for message");
             match self.mailbox.recv().await {
                 Ok(msg) => {
+                    has_incremental_render |= matches!(&msg, RenderActorRequest::RenderIncremental);
                     has_full_render |= self.process_message(msg).await;
                 }
                 Err(broadcast::error::RecvError::Closed) => {
@@ -113,18 +127,59 @@ impl RenderActor {
             }
             // read the queue to empty
             while let Ok(msg) = self.mailbox.try_recv() {
+                has_incremental_render |= matches!(&msg, RenderActorRequest::RenderIncremental);
                 has_full_render |= self.process_message(msg).await;
             }
             // if a full render is requested, we render the latest document
             // otherwise, we render the incremental changes for only once
             let has_full_render = has_full_render;
             log::debug!("RenderActor: has_full_render: {has_full_render}");
-            let Some(document) = self.view.read().as_ref().and_then(|view| view.doc()) else {
+            let Some(view) = self.view.read().clone() else {
+                log::info!("RenderActor: document is not ready");
+                continue;
+            };
+            let Some(document) = view.doc() else {
                 log::info!("RenderActor: document is not ready");
                 continue;
             };
 
+            if self.focus_enabled {
+                let hint = format!("focus-revision,{}", view.revision()).into_bytes();
+                if self.svg_sender.send(hint).is_err() {
+                    break;
+                }
+            }
+
+            let change_location = if has_full_render || has_incremental_render {
+                let page_hashes = Self::page_hashes(&document);
+                let changed_pages = self
+                    .previous_page_hashes
+                    .as_ref()
+                    .zip(page_hashes.as_ref())
+                    .map(|(old, new)| Self::changed_pages(old, new))
+                    .unwrap_or_default();
+                let location = if has_incremental_render && !has_full_render {
+                    self.change_location(&view, &changed_pages)
+                } else {
+                    None
+                };
+                self.previous_view = Some(view);
+                self.previous_page_hashes = page_hashes;
+                location
+            } else {
+                None
+            };
+
             let data = self.render(has_full_render, &document);
+            if let Some((page, x, y)) = change_location {
+                // Queue the hint ahead of its document delta. The frontend
+                // applies it only after that delta has finished rendering.
+                let hint = format!("change,{page} {x} {y}").into_bytes();
+                if self.svg_sender.send(hint).is_err() {
+                    log::info!("RenderActor: svg_sender is dropped");
+                    break;
+                }
+            }
             let Ok(_) = self.svg_sender.send(data) else {
                 log::info!("RenderActor: svg_sender is dropped");
                 break;
@@ -139,6 +194,98 @@ impl RenderActor {
         } else {
             self.render_delta(document)
         }
+    }
+
+    fn page_hashes(document: &TypstDocument) -> Option<Vec<u64>> {
+        let TypstDocument::Paged(document) = document else {
+            return None;
+        };
+        Some(
+            document
+                .pages()
+                .iter()
+                .map(|page| {
+                    let mut hasher = DefaultHasher::new();
+                    Self::hash_visible_frame(&page.frame, &mut hasher);
+                    page.fill.hash(&mut hasher);
+                    hasher.finish()
+                })
+                .collect(),
+        )
+    }
+
+    fn hash_visible_frame(frame: &Frame, hasher: &mut impl Hasher) {
+        frame.size().hash(hasher);
+        for (point, item) in frame.items() {
+            // Typst's Frame hash also includes source spans and introspection
+            // tags. Those can change after an edit without changing pixels.
+            match item {
+                FrameItem::Group(group) => {
+                    0_u8.hash(hasher);
+                    point.hash(hasher);
+                    group.transform.hash(hasher);
+                    group.clip.hash(hasher);
+                    Self::hash_visible_frame(&group.frame, hasher);
+                }
+                FrameItem::Text(text) => {
+                    1_u8.hash(hasher);
+                    point.hash(hasher);
+                    text.font.hash(hasher);
+                    text.size.hash(hasher);
+                    text.fill.hash(hasher);
+                    text.stroke.hash(hasher);
+                    text.text.hash(hasher);
+                    for glyph in &text.glyphs {
+                        glyph.id.hash(hasher);
+                        glyph.x_advance.hash(hasher);
+                        glyph.x_offset.hash(hasher);
+                        glyph.y_advance.hash(hasher);
+                        glyph.y_offset.hash(hasher);
+                    }
+                }
+                FrameItem::Shape(shape, _) => {
+                    2_u8.hash(hasher);
+                    point.hash(hasher);
+                    shape.hash(hasher);
+                }
+                FrameItem::Image(image, size, _) => {
+                    3_u8.hash(hasher);
+                    point.hash(hasher);
+                    image.hash(hasher);
+                    size.hash(hasher);
+                }
+                FrameItem::Link(..) | FrameItem::Tag(..) => {}
+            }
+        }
+    }
+
+    fn changed_pages(old: &[u64], new: &[u64]) -> Vec<usize> {
+        let mut changed: Vec<_> = new
+            .iter()
+            .enumerate()
+            .filter_map(|(index, hash)| (old.get(index) != Some(hash)).then_some(index + 1))
+            .collect();
+        if changed.is_empty() && old.len() > new.len() && !new.is_empty() {
+            changed.push(new.len());
+        }
+        changed
+    }
+
+    fn change_location(
+        &self,
+        view: &Arc<dyn CompileView>,
+        changed_pages: &[usize],
+    ) -> Option<(usize, f64, f64)> {
+        let first_changed = *changed_pages.first()?;
+        if let Some(previous) = &self.previous_view {
+            for position in view.changed_document_positions(previous.as_ref()) {
+                let page = position.page.get();
+                if changed_pages.contains(&page) {
+                    return Some((page, position.point.x.to_pt(), position.point.y.to_pt()));
+                }
+            }
+        }
+        Some((first_changed, 0.0, 0.0))
     }
 
     #[typst_macros::time]
