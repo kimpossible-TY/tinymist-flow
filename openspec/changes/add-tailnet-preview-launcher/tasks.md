@@ -33,7 +33,7 @@
 - [x] 6.2 Keep offscreen dummy pages as placeholders without canvas allocation.
 - [x] 6.3 Coalesce viewport work and clean up pending timers on disposal.
 - [x] 6.4 Build and deploy the frontend; restore PDE document mode.
-- [ ] 6.5 Confirm scrolling stability on the user's iPhone.
+- [x] 6.5 Confirm scrolling stability on the user's iPhone.
 
 ## 7. Follow changed locations
 
@@ -41,7 +41,7 @@
 - [x] 7.2 Carry the changed location before the ordered document delta, then navigate after the frontend finishes rendering.
 - [x] 7.3 Jump directly across virtual pages and defer navigation during an active scroll gesture.
 - [x] 7.4 Build and deploy the changed-location preview; confirm HTTP, WebSocket, and the 287-page document render.
-- [ ] 7.5 Confirm automatic change navigation on the user's iPhone.
+- [x] 7.5 Confirm automatic change navigation on the user's iPhone.
 
 ## 8. Share an explicit preview selection with Codex
 
@@ -49,12 +49,15 @@
 - [x] 8.2 Acknowledge persistence in the originating browser; keep taps independent of document rendering.
 - [x] 8.3 Add Tail Hosting configuration, a focus reader, and workspace guidance for consuming selection context.
 - [x] 8.4 Validate persistence, stale/unmapped handling, browser feedback, and live service deployment.
-- [ ] 8.5 Confirm a real iPhone tap followed by a Codex request with the user.
+- [x] 8.5 Confirm a real iPhone tap followed by a Codex request with the user.
 
 ## 9. Native mobile text copying
 
 - [x] 9.1 Exclude touch compatibility events and nested text-layer elements from mouse panning; explicitly allow native text selection/callouts.
-- [ ] 9.2 Build and deploy the updated frontend.
-- [ ] 9.3 Confirm long-press, selection handles, and Copy on the user's iPhone.
+- [x] 9.2 Build and deploy the updated frontend.
+- [x] 9.3 Confirm long-press, selection handles, and Copy on the user's iPhone.
+- [ ] 9.4 Restore the managed PDE LaunchAgent after macOS Documents access is refreshed for the rebuilt executable.
 
-9.2 deployment note: TypeScript/Vite and release CLI builds passed. The restarted service blocked while opening the fonts directory, before binding its HTTP listener. Restoring the previous executable and refreshing its existing Documents permission did not restore HTTP (502). The candidate executable is retained at `/Users/taeyoung/Developer/Tail_hosting/.runtime/tinymist-mobile-text-selection`; the deployed executable was rolled back. Awaiting the user's OS permission-dialog status before completing deployment. No iPhone copy behavior has been verified.
+2026-09-28 device report: The user confirmed scrolling stability, following changed locations, and a tap followed by a Codex request on iPhone. Native selection inside SVG `foreignObject` was displaced. An HTML overlay outside SVG aligned the initial selection and enabled Copy, but a downward handle drag occasionally selected all preceding content. Keeping the overlay hit-testable between text rows, disabling SVG selection, and retaining the overlay DOM while selected resolved that behavior in repeated iPhone tests on HTTPS port 23632. Copy and short-tap location selection also worked there.
+
+The same frontend binary now serves the production HTTPS port 23625. TypeScript/Vite and release CLI builds passed; HTTPS returned 200 and a WebSocket delivered the complete document frame. The user confirmed long-press, downward handle adjustment, Copy, and short-tap location selection in iPhone Safari on that address. The LaunchAgent is still unloaded because the rebuilt executable blocks while opening the document under macOS Documents privacy controls. A foreground restart loop currently serves port 23625. Tail Hosting's focus reader reports `service_matches: false` until the managed LaunchAgent is restored.

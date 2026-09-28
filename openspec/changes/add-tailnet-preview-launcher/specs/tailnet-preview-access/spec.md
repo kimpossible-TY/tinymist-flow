@@ -109,5 +109,6 @@ The frontend SHALL permit native text selection and copy callouts on the selecta
 
 #### Scenario: Select text with touch
 - **WHEN** a mobile reader long-presses selectable text and adjusts its native selection handles
-- **THEN** custom mouse panning does not prevent the browser's selection or copy menu
+- **THEN** the selected text and handles correspond to the touched text
+- **AND** custom mouse panning does not prevent the browser's selection or copy menu
 - **AND** ordinary document scrolling remains available

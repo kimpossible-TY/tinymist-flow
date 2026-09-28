@@ -103,6 +103,13 @@ windowElem.initTypstSvg = function (docRoot: SVGElement) {
     elem.addEventListener("mouseleave", mouseLeaveFromLink);
   }
 
+  if (window.matchMedia("(pointer: coarse)").matches) {
+    // iOS places selection handles incorrectly for HTML inside SVG foreignObject.
+    // Keep the SVG text for rendering and source mapping, and put selectable
+    // HTML in the same visual positions outside the SVG.
+    requestAnimationFrame(() => layoutTouchSelection(docRoot));
+  }
+
   /// initialize text layout at client side
   if (false) {
     setTimeout(() => {
@@ -146,6 +153,124 @@ windowElem.initTypstSvg = function (docRoot: SVGElement) {
     }
   }
 };
+
+function layoutTouchSelection(svg: SVGElement) {
+  const host = svg.parentElement as HTMLElement | null;
+  if (!host || !svg.isConnected) return;
+
+  host.classList.add("typst-touch-selection-host");
+
+  let overlay = host.querySelector<HTMLElement>(":scope > .typst-touch-selection");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.className = "typst-touch-selection";
+    host.appendChild(overlay);
+    let touchStartedAt = 0;
+    overlay.addEventListener(
+      "touchstart",
+      () => {
+        touchStartedAt = performance.now();
+      },
+      { passive: true },
+    );
+    overlay.addEventListener("click", (event) => {
+      if (touchStartedAt && performance.now() - touchStartedAt > 500) return;
+      overlay!.style.visibility = "hidden";
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      overlay!.style.visibility = "";
+      target?.dispatchEvent(
+        new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          clientX: event.clientX,
+          clientY: event.clientY,
+        }),
+      );
+    });
+  }
+  const selection = window.getSelection();
+  if (
+    overlay.childElementCount &&
+    (overlay.contains(selection?.anchorNode || null) ||
+      overlay.contains(selection?.focusNode || null))
+  )
+    return;
+
+  const hostRect = host.getBoundingClientRect();
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d")!;
+  const placements: { line: HTMLElement; rect: DOMRect }[] = [];
+
+  for (const source of svg.querySelectorAll<HTMLElement>(".tsel")) {
+    const foreignObject = source.parentElement;
+    const text = source.textContent || "";
+    if (!foreignObject || !text) continue;
+    const rect = foreignObject.getBoundingClientRect();
+    const sourceHeight = Number.parseFloat(foreignObject.getAttribute("height") || "0");
+    if (!rect.width || !rect.height || !sourceHeight) continue;
+
+    const style = getComputedStyle(source);
+    const fontSize = (Number.parseFloat(style.fontSize) * rect.height) / sourceHeight;
+    const line = document.createElement("span");
+    line.className = "typst-touch-selection-line";
+    line.textContent = text;
+    line.style.width = `${rect.width}px`;
+    line.style.height = `${rect.height}px`;
+    line.style.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+    line.style.lineHeight = `${rect.height}px`;
+
+    context.font = line.style.font;
+    const naturalWidth = context.measureText(text).width;
+    const characters = Array.from(text).length;
+    if (characters > 1) {
+      line.style.letterSpacing = `${(rect.width - naturalWidth) / characters}px`;
+    }
+
+    placements.push({ line, rect });
+  }
+
+  placements.sort(
+    (a, b) =>
+      a.rect.top + a.rect.bottom - (b.rect.top + b.rect.bottom) || a.rect.left - b.rect.left,
+  );
+  const rows: { top: number; bottom: number; placements: typeof placements }[] = [];
+  for (const placement of placements) {
+    const rect = placement.rect;
+    const row = rows.at(-1);
+    const center = (rect.top + rect.bottom) / 2;
+    if (
+      row &&
+      Math.abs(center - (row.top + row.bottom) / 2) <
+        0.6 * Math.max(rect.height, row.bottom - row.top)
+    ) {
+      row.top = Math.min(row.top, rect.top);
+      row.bottom = Math.max(row.bottom, rect.bottom);
+      row.placements.push(placement);
+    } else {
+      rows.push({ top: rect.top, bottom: rect.bottom, placements: [placement] });
+    }
+  }
+
+  let previousBottom = hostRect.top;
+  const rowElements = rows.map((row) => {
+    const element = document.createElement("div");
+    element.className = "typst-touch-selection-row";
+    element.style.marginTop = `${row.top - previousBottom}px`;
+    element.style.height = `${row.bottom - row.top}px`;
+    previousBottom = row.bottom;
+
+    let previousRight = hostRect.left;
+    for (const { line, rect } of row.placements.sort((a, b) => a.rect.left - b.rect.left)) {
+      line.style.marginLeft = `${rect.left - previousRight}px`;
+      line.style.top = `${rect.top - row.top}px`;
+      element.appendChild(line);
+      previousRight = rect.right;
+    }
+    return element;
+  });
+
+  overlay.replaceChildren(...rowElements);
+}
 
 function layoutText(svg: SVGElement) {
   const divs = svg.querySelectorAll<HTMLDivElement>(".tsel");

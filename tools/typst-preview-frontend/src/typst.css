@@ -163,6 +163,53 @@ body:has(.typst-focus-status) .typst-change-jump {
   background: #7db9dea0;
 }
 
+.typst-touch-selection-host {
+  position: relative;
+}
+
+.typst-touch-selection-host > svg {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.typst-touch-selection-host .tsel,
+.typst-touch-selection-host .tsel span {
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: none;
+}
+
+.typst-touch-selection {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  z-index: 1;
+}
+
+.typst-touch-selection-row {
+  display: flex;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.typst-touch-selection-line {
+  position: relative;
+  display: block;
+  flex: none;
+  overflow: hidden;
+  white-space: pre;
+  color: transparent;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+  pointer-events: auto;
+}
+
+.typst-touch-selection-line::selection {
+  color: transparent;
+  background: #7db9dea0;
+}
+
 .pseudo-link {
   fill: transparent;
   cursor: pointer;
