@@ -21,3 +21,6 @@ refs/
 # Modified by Tinymist Flow: keep local experiments and deployment records private.
 /.local/
 /.worktrees/
+
+# Python app packaging/test caches.
+__pycache__/

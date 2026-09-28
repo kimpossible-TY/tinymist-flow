@@ -1,0 +1,5 @@
+Generated with the built-in image_gen tool. Original generation completed during the earlier interrupted branding turn.
+
+Use case: logo-brand. Asset type: macOS app icon for a personal Typst editing and live preview tool called tinymist-flow. Create a single polished square icon, centered, suitable at 16px through 1024px. A clean deep indigo rounded-square tile carries one bold flowing ribbon that subtly suggests both a lowercase f and a turning document page; a few restrained cyan mist accents imply live flow and preview. Crisp vector-like geometry, high contrast, simple silhouette, no tiny details. Transparent outside the rounded square. No letters, words, logos of other products, mockup, border, or drop shadow. Ensure the motif remains legible at small size.
+
+The PNG is the source asset. scripts/flow-app.py resamples it into the standard iconset sizes and builds Flow.icns with iconutil.
