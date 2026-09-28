@@ -27,6 +27,14 @@ This is the tinymist language service, integrated with editor frontends and othe
 - Keep `proposal.md`, `design.md`, `tasks.md`, and spec deltas aligned with implementation when you work inside an OpenSpec change.
 - Use archived changes in `openspec/changes/archive/` as prior art, not as the source of current requirements.
 
+## Personal app workflow
+
+- Product name: `tinymist-flow`; retain upstream crate and protocol identifiers for compatibility.
+- Native app: `apps/macos/`; branding: `assets/branding/`; packaging: `scripts/flow-app.py`.
+- App guide source: `docs/tinymist/flow-app.typ`. Build with `yarn flow:build`, then validate with `yarn flow:test`.
+- Build releases from a clean commit, install the bundled app, verify document delivery, and tag confirmed versions `flow-vX.Y.Z`. Keep installed engines separate from `target/`.
+- Use short feature branches and Conventional Commits per work item; preserve upstream license notices and record intentionally imported upstream commits.
+
 ## Repo Map
 
 - `crates/tinymist-cli/`: the `tinymist` binary entrypoint and top-level CLI commands.
