@@ -117,6 +117,12 @@ func jobPID(_ label: String) -> Int? {
     guard let result, let range = result.range(of: "(?m)^\\s*pid = [0-9]+$", options: .regularExpression) else { return nil }
     return Int(result[range].split(separator: "=").last!.trimmingCharacters(in: .whitespaces))
 }
+func managedByApp(_ p: Profile) -> Bool {
+    guard let data = try? Data(contentsOf: agents.appendingPathComponent("\(p.label).plist")),
+          let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+          let args = plist["ProgramArguments"] as? [String] else { return false }
+    return args == [executable.path, "--serve", p.id]
+}
 func agent(_ p: Profile) -> [String: Any] {
     ["Label": p.label, "ProgramArguments": [executable.path, "--serve", p.id],
      "AssociatedBundleIdentifiers": [bundleID], "RunAtLoad": true, "KeepAlive": true, "ThrottleInterval": 10,
@@ -211,7 +217,7 @@ func runCLI(_ args: [String]) throws {
         try require(args.count == 2, "--status PROJECT_ID")
         let p = try settings.profile(args[1]); let pid = jobPID(p.label)
         try jsonOut(["id": p.id, "running": pid != nil, "pid": pid as Any? ?? NSNull(), "url": p.url,
-                     "focusFile": p.focusFile, "label": p.label])
+                     "focusFile": p.focusFile, "label": p.label, "managedByApp": managedByApp(p)])
     case "--launch-plan":
         try require(args.count == 2, "--launch-plan PROJECT_ID")
         let p = try settings.profile(args[1]); try jsonOut(["arguments": p.arguments(), "environment": p.environment(), "agent": agent(p)])

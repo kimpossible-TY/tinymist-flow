@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -108,7 +109,11 @@ def profiles(app):
     return json.loads(capture([executable(app), '--profiles']))['profiles']
 
 def running(app):
-    return [p['id'] for p in profiles(app) if json.loads(capture([executable(app), '--status', p['id']]))['running']]
+    active = []
+    for p in profiles(app):
+        state = json.loads(capture([executable(app), '--status', p['id']]))
+        if state['running'] and state.get('managedByApp', False): active.append(p['id'])
+    return active
 
 def healthy(app, ids, timeout=30):
     if not ids: return
@@ -126,6 +131,12 @@ def healthy(app, ids, timeout=30):
     if pending: raise RuntimeError('Preview startup failed; inspect Documents consent and logs: ' + ', '.join(pending))
 
 def replace_app(source, destination, data_dir=DATA, check_health=True):
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with (data_dir / 'install.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return _replace_app(source, destination, data_dir, check_health)
+
+def _replace_app(source, destination, data_dir, check_health):
     """Validate before stopping services; restore the old bundle on a failed update."""
     validate(source)
     destination.parent.mkdir(parents=True, exist_ok=True)

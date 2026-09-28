@@ -53,6 +53,11 @@ class Profiles(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0); self.assertIn('진입 파일', result.stderr)
 
 class InstallRecovery(unittest.TestCase):
+    def test_update_does_not_take_over_legacy_service(self):
+        with patch.object(package, 'profiles', return_value=[{'id': 'test'}]), patch.object(package, 'capture', return_value=json.dumps({'running': True, 'managedByApp': False})):
+            self.assertEqual(package.running(Path('/fake/app')), [])
+        with patch.object(package, 'profiles', return_value=[{'id': 'test'}]), patch.object(package, 'capture', return_value=json.dumps({'running': True, 'managedByApp': True})):
+            self.assertEqual(package.running(Path('/fake/app')), ['test'])
     def test_failed_update_restores_previous_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); old = root / 'Applications/tinymist-flow.app'; incoming = root / 'new/tinymist-flow.app'
