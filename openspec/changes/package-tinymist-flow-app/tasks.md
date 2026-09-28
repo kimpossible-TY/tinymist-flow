@@ -9,4 +9,4 @@
 - [x] 3.1 Validate configuration, lifecycle arguments, packaging, and rollback with isolated fixtures.
 - [ ] 3.2 Install and verify the native app and branded macOS permission entry.
 - [ ] 3.3 Migrate the live preview and verify HTTPS document delivery and focus service identity.
-- [ ] 3.4 Commit by work item, integrate main, push, and tag the installed release.
+- [x] 3.4 Commit by work item, integrate main, push, and tag the installed release.
