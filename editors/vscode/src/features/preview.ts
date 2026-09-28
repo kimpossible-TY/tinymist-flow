@@ -570,7 +570,34 @@ async function launchPreviewLsp(task: LaunchInBrowserTask | LaunchInWebViewTask)
       break;
     }
     case "browser": {
-      vscode.env.openExternal(vscode.Uri.parse(`http://127.0.0.1:${staticServerPort}`));
+      const previewUri = vscode.Uri.parse(`http://127.0.0.1:${staticServerPort}`);
+      const useRemoteBrowser =
+        !!vscode.env.remoteName &&
+        vscode.workspace.getConfiguration("workbench.browser").get<boolean>("enableRemoteProxy");
+      if (useRemoteBrowser) {
+        try {
+          await vscode.commands.executeCommand(
+            "workbench.action.browser.open",
+            previewUri.toString(),
+          );
+          break;
+        } catch (error) {
+          console.warn("Failed to open preview in integrated browser", error);
+        }
+      }
+      try {
+        if (!(await vscode.env.openExternal(previewUri))) {
+          throw new Error("VS Code did not open the browser");
+        }
+      } catch (error) {
+        console.error("Failed to open preview in browser", error);
+        void vscode.window.showWarningMessage(
+          l10nMsg(
+            "Preview is running at {url}, but VS Code could not open a browser. In a remote workspace, open this URL in the integrated browser with remote proxy enabled.",
+            { url: previewUri.toString() },
+          ),
+        );
+      }
       break;
     }
   }
