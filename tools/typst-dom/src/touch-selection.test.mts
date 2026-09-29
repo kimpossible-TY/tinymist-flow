@@ -32,6 +32,9 @@ describe("mobile selection render lifetime", () => {
   it("holds ranges in either end of the overlay, not carets or unrelated ranges", () => {
     const { root, selection } = fixture();
     expect(hasTouchSelection(root)).toBe(true);
+    selection.isCollapsed = true;
+    expect(hasTouchSelection(root)).toBe(false);
+    selection.isCollapsed = false;
     selection.anchorNode = null;
     expect(hasTouchSelection(root)).toBe(true);
     selection.focusNode = null;
