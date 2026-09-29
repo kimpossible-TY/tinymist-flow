@@ -112,3 +112,17 @@ The frontend SHALL permit native text selection and copy callouts on the selecta
 - **THEN** the selected text and handles correspond to the touched text
 - **AND** custom mouse panning does not prevent the browser's selection or copy menu
 - **AND** ordinary document scrolling remains available
+
+#### Scenario: Rendering during a native range selection
+- **WHEN** a noncollapsed range is anchored in the touch selection overlay and viewport or document updates arrive
+- **THEN** renderer mutations are deferred until the range collapses
+- **AND** queued document deltas are retained in order and the current viewport is refreshed on resume
+- **AND** a collapsed caret does not prevent overlay layout
+
+#### Scenario: Selection gestures are not source taps
+- **WHEN** a touch gesture adjusts an existing range, moves, is canceled, uses multiple touches, or is a long press
+- **THEN** it does not forward a source-location click
+
+#### Scenario: Native pinch zoom feedback
+- **WHEN** the visual viewport moves or resizes during native zoom
+- **THEN** preview viewport work is requested and focus feedback remains within the visible viewport

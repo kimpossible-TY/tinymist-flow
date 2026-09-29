@@ -5,6 +5,7 @@ import type { GConstructor, TypstDocumentContext } from "./typst-doc.mjs";
 import type { CanvasPage, TypstCanvasDocument } from "./typst-doc.canvas.mjs";
 import { patchSvgToContainer } from "./typst-patch.svg.mjs";
 import { ElementPoint, resolveSourceLeaf } from "./typst-debug-info.mjs";
+import { visibleVerticalBounds } from "./visual-viewport.mjs";
 
 export interface TypstSvgDocument {
   setCursorPaths(paths: ElementPoint[][]): void;
@@ -237,15 +238,16 @@ export function provideSvgDoc<
           this.currentScaleRatio,
       );
       const root = this.hookedElem.firstElementChild;
+      const visible = visibleVerticalBounds(
+        scroller.getBoundingClientRect(),
+        this.hookedElem.ownerDocument.defaultView?.visualViewport,
+      );
       const top = root
-        ? Math.max(
-            0,
-            (scroller.getBoundingClientRect().top - root.getBoundingClientRect().top) / scale,
-          )
+        ? Math.max(0, (visible.top - root.getBoundingClientRect().top) / scale)
         : Math.max(0, scroller.scrollTop / scale);
       // The document element may be hundreds of pages tall. Its clientHeight
       // is not the viewport height.
-      const bottom = top + Math.max(1, scroller.clientHeight) / scale;
+      const bottom = top + Math.max(1, visible.bottom - visible.top) / scale;
       const gap = (this.isContentPreview ? 6 : 5) / scale;
       let visualY = 0;
       let first = -1;

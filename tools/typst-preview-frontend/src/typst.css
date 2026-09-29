@@ -75,6 +75,7 @@ body {
 }
 
 .typst-focus-status {
+  box-sizing: border-box;
   position: fixed;
   bottom: max(10px, env(safe-area-inset-bottom));
   left: 12px;

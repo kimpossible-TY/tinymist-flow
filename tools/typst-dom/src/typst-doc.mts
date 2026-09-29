@@ -1,5 +1,6 @@
 import type { RenderSession } from "@myriaddreamin/typst.ts/dist/esm/renderer.mjs";
 import { TypstPreviewDocument } from "./index.preview.mjs";
+import { hasTouchSelection } from "./touch-selection.mjs";
 
 export interface ContainerDOMState {
   /// cached `hookedElem.offsetWidth` or `hookedElem.innerWidth`
@@ -119,6 +120,7 @@ export class TypstDocumentContext<O = any> {
   vpTimeout: any = undefined;
   /// sampled by last render time.
   sampledRenderTime: number = 0;
+  private selectionHeld = false;
   /// Called after the document DOM has settled for the queued updates.
   onDidRender?: () => void;
   /// page to partial render
@@ -179,6 +181,16 @@ export class TypstDocumentContext<O = any> {
     }
 
     this.installRescaleHandler();
+    const selectionChanged = () => {
+      const held = hasTouchSelection(this.hookedElem);
+      if (this.selectionHeld && !held) this.addViewportChange();
+      this.selectionHeld = held;
+    };
+    const ownerDocument = this.hookedElem.ownerDocument;
+    ownerDocument.addEventListener("selectionchange", selectionChanged);
+    this.disposeList.push(() =>
+      ownerDocument.removeEventListener("selectionchange", selectionChanged),
+    );
   }
 
   reset() {
@@ -413,6 +425,13 @@ export class TypstDocumentContext<O = any> {
 
     this.isRendering = true;
     const doUpdate = async () => {
+      // Keep the SVG and its selectable HTML on the same revision. Do not
+      // consume document deltas or replace selected nodes until selection ends.
+      if (hasTouchSelection(this.hookedElem)) {
+        this.selectionHeld = true;
+        this.isRendering = false;
+        return;
+      }
       this.cachedDOMState = this.retrieveDOMState();
 
       if (this.patchQueue.length === 0) {

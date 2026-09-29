@@ -16,6 +16,8 @@ Stop disables the project's LaunchAgent until Start is used again. Closing or qu
 
 The status distinguishes a stopped process from a responding HTTP server. HTTP readiness does not prove successful compilation: inspect the preview and logs for compiler errors. After restarting, tap the document again before asking Codex about a selected passage.
 
+On touch devices, selecting text temporarily holds preview rendering so the visual page and native selection stay on the same revision. Dismiss the selection to apply pending edits and refresh the visible pages. Native copying covers the currently populated preview pages, not an arbitrary range across the whole document. A drag or long press does not share a source location with Codex; dismiss the selection and use a short tap to share one.
+
 = Files and ownership
 
 - App and installed engine: `~/Applications/tinymist-flow.app`

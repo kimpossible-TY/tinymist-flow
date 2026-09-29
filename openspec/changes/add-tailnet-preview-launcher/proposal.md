@@ -36,4 +36,6 @@ Add an opt-in local focus file for mobile review. A document tap records its pag
 
 ## Native text copying on mobile
 
+Fix the recorded selection regression by synchronizing SVG and HTML selection lifetimes, rejecting non-tap gestures, and accounting for the mobile visual viewport. Device verification remains required; the recording alone does not establish a WebKit rendering root cause.
+
 Preserve native touch text selection and copy menus. Restrict custom document dragging to a primary mouse button on fine, hover-capable devices, and exclude all descendants of the text-selection layer.

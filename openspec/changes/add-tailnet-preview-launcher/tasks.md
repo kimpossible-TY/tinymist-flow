@@ -58,6 +58,15 @@
 - [x] 9.3 Confirm long-press, selection handles, and Copy on the user's iPhone.
 - [x] 9.4 Restore the managed PDE LaunchAgent after macOS Documents access is refreshed for the rebuilt executable.
 
+## 10. Selection stability regression
+
+- [x] 10.1 Defer document and viewport rendering while a native touch-overlay range is selected, then resume queued updates on collapse.
+- [x] 10.2 Reject selection, long-press, drag, canceled and multitouch gestures as source taps.
+- [x] 10.3 Handle visual viewport changes and keep focus feedback within the zoomed viewport.
+- [x] 10.4 Add regression tests, build frontend, and validate the OpenSpec change.
+- [ ] 10.5 Verify document delivery from the updated installed preview.
+- [ ] 10.6 Repeat the recorded native selection gesture on iPhone; do not claim WebKit painting is fixed from unit tests.
+
 2026-09-28 device report: The user confirmed scrolling stability, following changed locations, and a tap followed by a Codex request on iPhone. Native selection inside SVG `foreignObject` was displaced. An HTML overlay outside SVG aligned the initial selection and enabled Copy, but a downward handle drag occasionally selected all preceding content. Keeping the overlay hit-testable between text rows, disabling SVG selection, and retaining the overlay DOM while selected resolved that behavior in repeated iPhone tests on HTTPS port 23632. Copy and short-tap location selection also worked there.
 
 The same frontend binary now serves the production HTTPS port 23625. TypeScript/Vite and release CLI builds passed; HTTPS returned 200 and a WebSocket delivered the complete document frame. The user confirmed long-press, downward handle adjustment, Copy, and short-tap location selection in iPhone Safari on that address. After macOS administrator authentication, the Documents permission was switched back on and the temporary restart loop was stopped. The managed PDE LaunchAgent resumed on port 23625 with the original project and fonts paths. A certificate-validated WebSocket delivered a complete 16,630,540-byte document frame, and Tail Hosting's focus reader reported `service_matches: true` for the LaunchAgent PID. Restart reset the focus record to waiting; the next user tap establishes a fresh selection.

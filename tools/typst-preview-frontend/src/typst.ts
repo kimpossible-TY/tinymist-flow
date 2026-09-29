@@ -6,6 +6,8 @@
 // @doc (event.timeStamp): http://api.jquery.com/event.timeStamp/
 
 import { TypstDomWindowElement } from "typst-dom";
+import { hasTouchSelection } from "typst-dom/touch-selection.mjs";
+import { TouchTap } from "./touch-tap";
 
 // @bug (event.currentTime): https://bugzilla.mozilla.org/show_bug.cgi?id=238041
 let ignoredEvent = (function () {
@@ -38,11 +40,11 @@ var overLapping = function (a: Element, b: Element) {
     ) &&
     /// determine overlapping by area
     (Math.abs(aRect.left - bRect.left) + Math.abs(aRect.right - bRect.right)) /
-    Math.max(aRect.width, bRect.width) <
-    0.5 &&
+      Math.max(aRect.width, bRect.width) <
+      0.5 &&
     (Math.abs(aRect.bottom - bRect.bottom) + Math.abs(aRect.top - bRect.top)) /
-    Math.max(aRect.height, bRect.height) <
-    0.5
+      Math.max(aRect.height, bRect.height) <
+      0.5
   );
 };
 
@@ -165,16 +167,41 @@ function layoutTouchSelection(svg: SVGElement) {
     overlay = document.createElement("div");
     overlay.className = "typst-touch-selection";
     host.appendChild(overlay);
-    let touchStartedAt = 0;
+    const tap = new TouchTap();
     overlay.addEventListener(
       "touchstart",
-      () => {
-        touchStartedAt = performance.now();
+      (event) => {
+        const touch = event.touches[0];
+        if (!touch) return;
+        tap.begin(
+          touch.clientX,
+          touch.clientY,
+          performance.now(),
+          event.touches.length,
+          document.getSelection()?.isCollapsed === false,
+        );
       },
       { passive: true },
     );
+    overlay.addEventListener(
+      "touchmove",
+      (event) => {
+        const touch = event.touches[0];
+        if (touch) tap.move(touch.clientX, touch.clientY, event.touches.length);
+      },
+      { passive: true },
+    );
+    overlay.addEventListener(
+      "touchend",
+      (event) => {
+        const touch = event.changedTouches[0];
+        if (touch) tap.move(touch.clientX, touch.clientY, 1);
+      },
+      { passive: true },
+    );
+    overlay.addEventListener("touchcancel", () => tap.cancel(), { passive: true });
     overlay.addEventListener("click", (event) => {
-      if (touchStartedAt && performance.now() - touchStartedAt > 500) return;
+      if (!tap.consume(performance.now(), document.getSelection()?.isCollapsed === false)) return;
       overlay!.style.visibility = "hidden";
       const target = document.elementFromPoint(event.clientX, event.clientY);
       overlay!.style.visibility = "";
@@ -188,13 +215,7 @@ function layoutTouchSelection(svg: SVGElement) {
       );
     });
   }
-  const selection = window.getSelection();
-  if (
-    overlay.childElementCount &&
-    (overlay.contains(selection?.anchorNode || null) ||
-      overlay.contains(selection?.focusNode || null))
-  )
-    return;
+  if (overlay.childElementCount && hasTouchSelection(host)) return;
 
   const hostRect = host.getBoundingClientRect();
   const canvas = document.createElement("canvas");

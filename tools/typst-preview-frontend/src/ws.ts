@@ -1,4 +1,5 @@
 import { PreviewMode } from "typst-dom/typst-doc.mjs";
+import { hasTouchSelection } from "typst-dom/touch-selection.mjs";
 import {
   TypstPreviewDocument as TypstDocument,
   TypstDomHookedElement,
@@ -50,6 +51,20 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
   let focusRevision: string | undefined;
   let pendingFocusRevision: string | undefined;
   let focusStatus: HTMLDivElement | undefined;
+  const positionFocusStatus = () => {
+    const viewport = window.visualViewport;
+    if (!focusStatus || !viewport) return;
+    Object.assign(focusStatus.style, {
+      left: `${viewport.offsetLeft + viewport.width / 2}px`,
+      top: `${viewport.offsetTop + viewport.height - 12 / viewport.scale}px`,
+      right: "auto",
+      bottom: "auto",
+      margin: "0",
+      maxWidth: `${Math.max(1, viewport.width * viewport.scale - 24)}px`,
+      transform: `translate(-50%, -100%) scale(${1 / viewport.scale})`,
+      transformOrigin: "bottom center",
+    });
+  };
   const korean = navigator.language.startsWith("ko");
   const showFocusStatus = (ko: string, en: string) => {
     if (!focusStatus) {
@@ -60,6 +75,7 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
       document.body.appendChild(focusStatus);
     }
     focusStatus.textContent = korean ? ko : en;
+    positionFocusStatus();
   };
 
   function createSvgDocument(kModule: RenderSession) {
@@ -179,6 +195,18 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
     // drag (panal resizing) -> rescaling
     // window.onresize = () => svgDoc.rescale();
     subsribes.push(fromEvent(window, "resize").subscribe(() => svgDoc.addViewportChange()));
+    if (window.visualViewport) {
+      for (const event of ["resize", "scroll"]) {
+        subsribes.push(
+          fromEvent(window.visualViewport, event)
+            .pipe(auditTime(80))
+            .subscribe(() => {
+              positionFocusStatus();
+              svgDoc.addViewportChange();
+            }),
+        );
+      }
+    }
 
     if (!isContentPreview) {
       subsribes.push(
@@ -458,6 +486,7 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
           "Share a location with Codex · tap the document",
         );
         windowElem.onPreviewFocus = (position) => {
+          if (hasTouchSelection(svgDoc.impl.hookedElem)) return;
           if (!focusRevision || svgDoc.impl.isRendering || svgDoc.impl.patchQueue.length) {
             showFocusStatus(
               "문서 갱신 중 · 잠시 후 다시 탭해 주세요",
