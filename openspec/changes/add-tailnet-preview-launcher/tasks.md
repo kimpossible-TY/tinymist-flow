@@ -64,14 +64,16 @@
 - [x] 10.2 Reject selection, long-press, drag, canceled and multitouch gestures as source taps.
 - [x] 10.3 Handle visual viewport changes and keep focus feedback within the zoomed viewport.
 - [x] 10.4 Add regression tests, build frontend, and validate the OpenSpec change.
-- [ ] 10.5 Verify document delivery from the updated installed preview.
+- [x] 10.5 Verify document delivery from the updated installed preview.
 - [ ] 10.6 Repeat the recorded native selection gesture on iPhone; do not claim WebKit painting is fixed from unit tests.
 
 2026-09-29 regression follow-up: 32 frontend/DOM tests, both TypeScript checks, preview and release-engine builds, 8 app tests, generated-doc consistency, and strict OpenSpec validation passed. A clean-source 0.1.1 candidate is retained at `dist/mobile-selection/tinymist-flow.app`. Deployment first exposed an asynchronous stop/start race (the stopped job remained briefly visible), then an explicit TCC Documents request for the new engine: existing code requirement mismatch and AUTHREQ_PROMPTING. Do not bypass consent. Restore 0.1.0 while waiting for the user to approve a coordinated reinstall. Mobile gesture verification and final release tagging remain pending.
 
-Final handoff state: the installed bundle was restored to 0.1.0 and its LaunchAgent restarted (PID 36841), but it has not opened its HTTP listener after the outstanding consent request; HTTPS returns 502. Bundle rollback is confirmed, service recovery is NOT confirmed. User action on the macOS permission prompt is required before further deployment/verification. Do not report the preview as healthy.
+Prior handoff state: the installed bundle was restored to 0.1.0 and its LaunchAgent restarted (PID 36841), but it did not open its HTTP listener after the outstanding consent request; HTTPS returned 502. Bundle rollback was confirmed, service recovery was not yet confirmed.
 
-2026-09-29 consent follow-up: user approval restored HTTP 200 for 0.1.0. After confirming the old job fully stopped, installed the unchanged clean-source 0.1.1 candidate and started PID 37634. TCC logged another Documents code-requirement mismatch and AUTHREQ_PROMPTING at 20:19:37 KST. The updated bundle is now left installed awaiting its own user approval (HTTPS 502); do not roll back repeatedly and invalidate the coordinated approval flow. Task 10.5 remains pending document delivery, and 10.6 remains pending iPhone verification.
+2026-09-29 consent follow-up: user approval restored HTTP 200 for 0.1.0. After confirming the old job fully stopped, installed the unchanged clean-source 0.1.1 candidate and started PID 37634. TCC logged another Documents code-requirement mismatch and AUTHREQ_PROMPTING at 20:19:37 KST. The updated bundle was left installed while awaiting its own approval (HTTPS 502 at that time).
+
+2026-09-29 deployment verification: after the user approved the 0.1.1 Documents request, the managed PDE service at PID 37634 returned HTTPS 200 and delivered a complete 16,233,896-byte `new` document frame through a certificate-validated WebSocket. The served frontend contained the new selection and tap guards. Task 10.5 is complete. Task 10.6 remains pending a fresh iPhone selection-handle test; do not tag a confirmed release based on the transport check alone.
 
 2026-09-28 device report: The user confirmed scrolling stability, following changed locations, and a tap followed by a Codex request on iPhone. Native selection inside SVG `foreignObject` was displaced. An HTML overlay outside SVG aligned the initial selection and enabled Copy, but a downward handle drag occasionally selected all preceding content. Keeping the overlay hit-testable between text rows, disabling SVG selection, and retaining the overlay DOM while selected resolved that behavior in repeated iPhone tests on HTTPS port 23632. Copy and short-tap location selection also worked there.
 
