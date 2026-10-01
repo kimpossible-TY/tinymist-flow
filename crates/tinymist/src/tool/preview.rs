@@ -1,7 +1,7 @@
 //! Document preview tool for Typst
 
 pub use compile::{PreviewCompileView, ProjectPreviewHandler};
-pub use http::{make_http_server, HttpServer};
+pub use http::{make_http_server, make_theme_http_server, HttpServer};
 
 mod compile;
 mod http;
@@ -165,6 +165,11 @@ impl PreviewArgs {
 /// Specify arguments related to the preview CLI.
 #[derive(Debug, Clone, clap::Parser)]
 pub struct PreviewCliArgs {
+    /// Follow each viewer's device theme using sys.inputs.theme (light/dark).
+    /// Requires paged output; overrides any explicit theme input.
+    #[clap(long)]
+    pub follow_system_theme: bool,
+
     /// Configure the preview service.
     #[clap(flatten)]
     pub preview: PreviewArgs,

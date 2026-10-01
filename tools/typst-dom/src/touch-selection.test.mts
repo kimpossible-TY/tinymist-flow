@@ -87,6 +87,29 @@ describe("mobile selection render lifetime", () => {
     await frames.shift()!(0);
     ctx.dispose();
     expect(ownerDocument.removeEventListener).toHaveBeenCalledWith("selectionchange", onSelection);
+    // A theme transition may dispose after a frame is queued but before it runs.
+    ctx.addChangement(["diff-v1", "after disposal"]);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("does not render a queued animation frame after disposal", async () => {
+    const { root, selection } = fixture();
+    selection.isCollapsed = true;
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    vi.stubGlobal("document", { documentElement: {} });
+    vi.stubGlobal("getComputedStyle", () => ({ getPropertyValue: () => "white" }));
+    vi.spyOn(TypstDocumentContext.prototype as any, "installRescaleHandler").mockImplementation(
+      () => {},
+    );
+    const ctx = new TypstDocumentContext({ hookedElem: root, windowElem: {}, kModule: {} } as any);
+    const render = vi.fn();
+    (ctx as any).r = { rescale: vi.fn(), rerender: render, postRender: vi.fn() };
+    ctx.addChangement(["diff-v1", "queued"]);
+    ctx.dispose();
+    await frames.shift()!(0);
+    expect(render).not.toHaveBeenCalled();
+    expect(ctx.isRendering).toBe(false);
   });
 });
 

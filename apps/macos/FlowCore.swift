@@ -60,7 +60,7 @@ struct Profile: Codable {
     }
     func arguments() -> [String] {
         var args = ["preview", path(entry), "--root", root, "--data-plane-host=127.0.0.1:\(port)",
-                    "--control-plane-host=127.0.0.1:0", "--no-open", "--partial-rendering=true", "--preview-mode=document"]
+                    "--control-plane-host=127.0.0.1:0", "--no-open", "--partial-rendering=true", "--preview-mode=document", "--follow-system-theme"]
         for font in fonts { args += ["--font-path", path(font)] }
         if !packages.isEmpty { args += ["--package-path", packages] }
         return args

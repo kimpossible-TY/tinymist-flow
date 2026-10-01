@@ -18,6 +18,14 @@ The status distinguishes a stopped process from a responding HTTP server. HTTP r
 
 On touch devices, selecting text temporarily holds preview rendering so the visual page and native selection stay on the same revision. Dismiss the selection to apply pending edits and refresh the visible pages. Native copying covers the currently populated preview pages, not an arbitrary range across the whole document. A drag or long press does not share a source location with Codex; dismiss the selection and use a short tap to share one.
 
+== Device document theme
+
+Managed previews follow the viewing device's light or dark appearance, including changes after opening the page. The theme selector offers System, Light, and Dark (기기 설정, 라이트, 다크). An override affects only that viewer; choose System to resume device following. The `t` shortcut toggles the native palette. Switching preserves scroll and preview zoom and waits until an active touch text selection is dismissed.
+
+Documents must choose their native palette from `sys.inputs.at("theme", default: "light")`, using the values `"light"` and `"dark"`. PDE and Ewald already follow this contract. Flow compiles both variants on the host and serves them through the same registered port and tailnet URL; it does not invert document colors or edit the source. Documents without this input contract still work but will not change palette. Color-only variants preserve layout most predictably. Each viewer downloads only its selected variant.
+
+For standalone paged preview, enable this with `tinymist preview main.typ --follow-system-theme`. This overrides an explicit `--input theme=...`; unrelated inputs remain unchanged. Without the flag, preview keeps its existing behavior. HTML and bundle outputs do not support this option. Compiling both variants uses additional host memory and CPU.
+
 = Files and ownership
 
 - App and installed engine: `~/Applications/tinymist-flow.app`

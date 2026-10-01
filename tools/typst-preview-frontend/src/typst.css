@@ -66,7 +66,9 @@ body {
   padding: 11px 16px;
   background: #17212f;
   color: #fff;
-  font: 600 14px system-ui, sans-serif;
+  font:
+    600 14px system-ui,
+    sans-serif;
   box-shadow: 0 3px 14px #0005;
 }
 
@@ -88,7 +90,9 @@ body {
   padding: 7px 12px;
   background: #17212fed;
   color: #fff;
-  font: 12px/1.4 system-ui, sans-serif;
+  font:
+    12px/1.4 system-ui,
+    sans-serif;
   text-align: center;
   overflow-wrap: anywhere;
   pointer-events: none;
@@ -104,6 +108,42 @@ body:has(.typst-focus-status) .typst-change-jump {
   margin: 0;
   transform-origin: 0 0;
   background-color: #fff;
+}
+
+html[data-document-theme="light"] {
+  color-scheme: light;
+  --typst-preview-background-color: #e8ebef;
+}
+
+html[data-document-theme="dark"] {
+  color-scheme: dark;
+  --typst-preview-background-color: #151922;
+}
+
+html[data-document-theme] #typst-app {
+  background-color: transparent;
+}
+
+.typst-theme-selector {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  z-index: 30;
+  max-width: 150px;
+  border: 1px solid #8886;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font:
+    14px system-ui,
+    sans-serif;
+  background: #f4f6f8ed;
+  color: #17212f;
+  box-shadow: 0 2px 10px #0002;
+}
+
+html[data-document-theme="dark"] .typst-theme-selector {
+  background: #222a36ed;
+  color: #eef2f7;
 }
 
 #typst-app.invert-colors .typst-doc {

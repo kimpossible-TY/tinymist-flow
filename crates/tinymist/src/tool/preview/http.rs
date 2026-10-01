@@ -28,6 +28,17 @@ pub async fn make_http_server(
     static_file_addr: String,
     websocket_tx: mpsc::UnboundedSender<HyperWebsocket>,
 ) -> HttpServer {
+    make_theme_http_server(frontend_html, static_file_addr, websocket_tx, None).await
+}
+
+/// Create a preview server with an optional independent dark document stream.
+/// Both theme routes use the same origin restrictions as the default endpoint.
+pub async fn make_theme_http_server(
+    frontend_html: String,
+    static_file_addr: String,
+    websocket_tx: mpsc::UnboundedSender<HyperWebsocket>,
+    dark_websocket_tx: Option<mpsc::UnboundedSender<HyperWebsocket>>,
+) -> HttpServer {
     use http_body_util::Full;
     use hyper::body::{Bytes, Incoming};
     type Server = hyper_util::server::conn::auto::Builder<hyper_util::rt::TokioExecutor>;
@@ -42,10 +53,12 @@ pub async fn make_http_server(
     let make_service = move || {
         let frontend_html = frontend_html.clone();
         let websocket_tx = websocket_tx.clone();
+        let dark_websocket_tx = dark_websocket_tx.clone();
         let static_file_addr = static_file_addr.clone();
         service_fn(move |mut req: hyper::Request<Incoming>| {
             let frontend_html = frontend_html.clone();
             let websocket_tx = websocket_tx.clone();
+            let dark_websocket_tx = dark_websocket_tx.clone();
             let static_file_addr = static_file_addr.clone();
             async move {
                 // When a user visits a website in a browser, that website can try to connect to
@@ -74,6 +87,16 @@ pub async fn make_http_server(
 
                 // Check if the request is a websocket upgrade request.
                 if hyper_tungstenite::is_upgrade_request(&req) {
+                    let sender = match theme_route(req.uri().path(), dark_websocket_tx.is_some()) {
+                        Some(false) => &websocket_tx,
+                        Some(true) => dark_websocket_tx.as_ref().unwrap(),
+                        None => {
+                            return Ok(hyper::Response::builder()
+                                .status(hyper::StatusCode::NOT_FOUND)
+                                .body(Full::<Bytes>::default())
+                                .unwrap());
+                        }
+                    };
                     if origin_header.is_none() {
                         log::error!("websocket connection is not set `Origin` header, which will be a hard error in the future.");
                     }
@@ -84,7 +107,7 @@ pub async fn make_http_server(
                         anyhow::bail!("cannot upgrade as websocket connection");
                     };
 
-                    let _ = websocket_tx.send(websocket);
+                    let _ = sender.send(websocket);
 
                     // Return the response so the spawned future can continue.
                     Ok(response)
@@ -166,6 +189,17 @@ pub async fn make_http_server(
         addr,
         shutdown_tx,
         join,
+    }
+}
+
+fn theme_route(path: &str, enabled: bool) -> Option<bool> {
+    if !enabled {
+        return Some(false);
+    }
+    match path {
+        "/" | "/_theme/light" => Some(false),
+        "/_theme/dark" => Some(true),
+        _ => None,
     }
 }
 
@@ -304,6 +338,17 @@ mod tests {
         assert!(check_origin("http://localhost:42", "localhost:42", 42));
         assert!(check_origin("http://localhost:42", "localhost:0", 42));
         assert!(check_origin("http://localhost", "localhost:0", 42));
+    }
+
+    #[test]
+    fn test_theme_routes_are_explicit_and_opt_in() {
+        assert_eq!(theme_route("/", true), Some(false));
+        assert_eq!(theme_route("/_theme/light", true), Some(false));
+        assert_eq!(theme_route("/_theme/dark", true), Some(true));
+        assert_eq!(theme_route("/_theme/unknown", true), None);
+        assert_eq!(theme_route("/unknown", true), None);
+        // Preserve the legacy helper's path behavior without the option.
+        assert_eq!(theme_route("/unknown", false), Some(false));
     }
 
     #[test]

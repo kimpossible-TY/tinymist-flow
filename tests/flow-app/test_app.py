@@ -32,6 +32,7 @@ class Profiles(unittest.TestCase):
         self.assertIn('--data-plane-host=127.0.0.1:24650', plan['arguments'])
         self.assertIn(str(self.root / 'project with spaces/main.typ'), plan['arguments'])
         self.assertIn('--no-open', plan['arguments'])
+        self.assertIn('--follow-system-theme', plan['arguments'])
         self.assertEqual(plan['environment']['TINYMIST_ALLOWED_ORIGINS'], 'https://example.ts.net:24650')
         self.assertEqual(plan['agent']['ProgramArguments'][1:], ['--serve', 'test'])
         self.assertIn(package.APP_ID, plan['agent']['AssociatedBundleIdentifiers'])

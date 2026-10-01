@@ -16,6 +16,7 @@ import { RenderSession } from "@myriaddreamin/typst.ts/dist/esm/renderer.mjs";
 import { WebSocketSubject, webSocket } from "rxjs/webSocket";
 import { Subject, Subscription, buffer, debounceTime, auditTime, fromEvent, tap } from "rxjs";
 import { handleHtmlPreviewFrame } from "./html-preview";
+import type { ReadingState } from "./document-theme";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
 // for debug propose
@@ -31,9 +32,19 @@ export interface WsArgs {
   url: string;
   previewMode: PreviewMode;
   isContentPreview: boolean;
+  nativeTheme?: boolean;
+  onToggleTheme?: () => void;
+  readingState?: ReadingState;
 }
 
-export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
+export async function wsMain({
+  url,
+  previewMode,
+  isContentPreview,
+  nativeTheme,
+  onToggleTheme,
+  readingState,
+}: WsArgs) {
   if (!url) {
     const hookedElem = document.getElementById("typst-app");
     if (hookedElem) {
@@ -45,6 +56,7 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
 
   let disposed = false;
   let $ws: WebSocketSubject<ArrayBuffer> | undefined = undefined;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   const subsribes: Subscription[] = [];
   let queueChangedLocation: ((location: [number, number, number]) => void) | undefined;
   let clearChangedLocation: (() => void) | undefined;
@@ -100,6 +112,10 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
         };
       },
     });
+    if (readingState) {
+      svgDoc.impl.currentScaleRatio = readingState.scale;
+      svgDoc.impl.partialRenderPage = readingState.page;
+    }
 
     if (previewMode === PreviewMode.Doc && !isContentPreview) {
       let pendingChange: [number, number, number] | undefined;
@@ -182,9 +198,16 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
     }
 
     const previousOnDidRender = svgDoc.impl.onDidRender;
+    let restoreReadingState = readingState;
     svgDoc.impl.onDidRender = () => {
       focusRevision = pendingFocusRevision;
       previousOnDidRender?.();
+      if (restoreReadingState) {
+        const state = restoreReadingState;
+        restoreReadingState = undefined;
+        resizeTarget.scrollTo({ top: state.top, left: state.left, behavior: "instant" });
+        svgDoc.addViewportChange();
+      }
     };
     svgDoc.impl.disposeList.push(() => {
       windowElem.onPreviewFocus = undefined;
@@ -280,6 +303,10 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
     if (pageNextSelector) {
       pageNextSelector.addEventListener("click", updateNext);
     }
+    svgDoc.impl.disposeList.push(() => {
+      pagePrevSelector?.removeEventListener("click", updatePrev);
+      pageNextSelector?.removeEventListener("click", updateNext);
+    });
 
     if (previewMode === PreviewMode.Slide) {
       {
@@ -287,13 +314,17 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
           | HTMLSelectElement
           | undefined;
         if (inpPageSelector) {
-          inpPageSelector.addEventListener("input", () => {
+          const changePage = () => {
             if (inpPageSelector.value.length === 0) {
               return;
             }
             const page = Number.parseInt(inpPageSelector.value);
             svgDoc.setPartialPageNumber(page);
-          });
+          };
+          inpPageSelector.addEventListener("input", changePage);
+          svgDoc.impl.disposeList.push(() =>
+            inpPageSelector.removeEventListener("input", changePage),
+          );
         }
       }
     }
@@ -314,6 +345,10 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
     };
 
     const toggleTheme = () => {
+      if (nativeTheme) {
+        onToggleTheme?.();
+        return;
+      }
       const typstApp = document.getElementById("typst-app");
       console.log("toggleTheme", typstApp);
       if (typstApp) {
@@ -324,7 +359,12 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
     const helpButton = document.getElementById("typst-top-help-button");
     helpButton?.addEventListener("click", toggleHelp);
 
-    window.addEventListener("keydown", (e) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLElement &&
+        e.target.matches("input, select, textarea, [contenteditable]")
+      )
+        return;
       let handled = true;
 
       const scrollDelta = 50;
@@ -382,13 +422,18 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
       if (handled) {
         e.preventDefault();
       }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    svgDoc.impl.disposeList.push(() => {
+      window.removeEventListener("keydown", handleKeyDown);
+      helpButton?.removeEventListener("click", toggleHelp);
     });
 
     return svgDoc;
   }
 
   function setupSocket(svgDoc: TypstDocument): () => void {
-    windowElem.documents.push(svgDoc);
+    if (!windowElem.documents.includes(svgDoc)) windowElem.documents.push(svgDoc);
 
     // todo: reconnect setTimeout(() => setupSocket(svgDoc), 1000);
     $ws = webSocket<ArrayBuffer>({
@@ -398,6 +443,7 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
       deserializer: (event) => event.data,
       openObserver: {
         next: (e) => {
+          if (disposed) return;
           const sock = e.target;
           console.log("WebSocket connection opened", sock);
           windowElem.typstWebsocket = sock as any;
@@ -419,7 +465,9 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
             );
           $ws?.unsubscribe();
           if (!disposed) {
-            setTimeout(() => setupSocket(svgDoc), 1000);
+            reconnectTimer = setTimeout(() => {
+              if (!disposed) setupSocket(svgDoc);
+            }, 1000);
           }
         },
       },
@@ -429,6 +477,7 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
 
     const dispose = () => {
       disposed = true;
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       svgDoc.dispose();
       const index = windowElem.documents.indexOf(svgDoc);
       if (index >= 0) {
@@ -438,6 +487,7 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
         sub.unsubscribe();
       }
       $ws?.complete();
+      windowElem.typstWebsocket = undefined as any;
     };
 
     // window.typstWebsocket = new WebSocket("ws://127.0.0.1:23625");
@@ -641,6 +691,10 @@ export async function wsMain({ url, previewMode, isContentPreview }: WsArgs) {
         svgDoc.setPartialRendering(true);
         return;
       } else if (message[0] === "invert-colors") {
+        if (nativeTheme) {
+          document.getElementById("typst-app")?.classList.remove("invert-colors", "normal-image");
+          return;
+        }
         const rawStrategy = dec.decode((message[1] as any).buffer).trim();
         const strategy =
           INVERT_COLORS_STRATEGY.find((t) => t === rawStrategy) ||

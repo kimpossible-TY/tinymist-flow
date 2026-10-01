@@ -121,6 +121,7 @@ export class TypstDocumentContext<O = any> {
   /// sampled by last render time.
   sampledRenderTime: number = 0;
   private selectionHeld = false;
+  private disposed = false;
   /// Called after the document DOM has settled for the queued updates.
   onDidRender?: () => void;
   /// page to partial render
@@ -199,6 +200,7 @@ export class TypstDocumentContext<O = any> {
   }
 
   dispose() {
+    this.disposed = true;
     if (this.vpTimeout !== undefined) clearTimeout(this.vpTimeout);
     this.patchQueue.length = 0;
     const disposeList = this.disposeList;
@@ -419,12 +421,16 @@ export class TypstDocumentContext<O = any> {
   }
 
   private triggerUpdate() {
-    if (this.isRendering) {
+    if (this.disposed || this.isRendering) {
       return;
     }
 
     this.isRendering = true;
     const doUpdate = async () => {
+      if (this.disposed) {
+        this.isRendering = false;
+        return;
+      }
       // Keep the SVG and its selectable HTML on the same revision. Do not
       // consume document deltas or replace selected nodes until selection ends.
       if (hasTouchSelection(this.hookedElem)) {
@@ -454,6 +460,7 @@ export class TypstDocumentContext<O = any> {
         if (needRerender) {
           this.r.rescale();
           await this.r.rerender();
+          if (this.disposed) return;
           this.r.rescale();
         }
         let t2 = performance.now();
@@ -474,6 +481,7 @@ export class TypstDocumentContext<O = any> {
   }
 
   private postprocessChanges(renderSucceeded = true) {
+    if (this.disposed) return;
     // case RenderMode.Svg: {
     // const docRoot = this.hookedElem.firstElementChild as SVGElement;
     // if (docRoot) {
@@ -493,6 +501,7 @@ export class TypstDocumentContext<O = any> {
   }
 
   addChangement(change: [string, string]) {
+    if (this.disposed) return;
     if (change[0] === "new") {
       this.patchQueue.splice(0, this.patchQueue.length);
     }

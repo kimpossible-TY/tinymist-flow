@@ -319,6 +319,13 @@ impl PreviewBuilder {
         Ok(self)
     }
 
+    /// Create an independent rendering pipeline sharing the ordered focus store.
+    pub fn sibling(&self, config: PreviewConfig) -> Self {
+        let mut sibling = Self::new(config);
+        sibling.focus_store = self.focus_store.clone();
+        sibling
+    }
+
     pub fn compile_watcher(&self, task_id: String) -> &Arc<CompileWatcher> {
         self.compile_watcher.get_or_init(|| {
             Arc::new(CompileWatcher {
@@ -413,6 +420,32 @@ mod tests {
     fn escapes_html_text_without_breaking_multibyte_code_points() {
         assert_eq!(escape_html_text("☃<>&"), "☃&lt;&gt;&amp;");
         assert_eq!(escape_html_text("plain text"), "plain text");
+    }
+
+    #[test]
+    fn sibling_shares_focus_store_but_not_compile_state() {
+        let path = std::env::temp_dir().join(format!(
+            "tinymist-sibling-focus-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let builder = super::PreviewBuilder::new(super::PreviewConfig::default())
+            .with_focus_file(path.clone())
+            .unwrap();
+        let sibling = builder.sibling(super::PreviewConfig::default());
+        assert!(Arc::ptr_eq(
+            builder.focus_store.as_ref().unwrap(),
+            sibling.focus_store.as_ref().unwrap(),
+        ));
+        assert!(!Arc::ptr_eq(&builder.doc_sender, &sibling.doc_sender));
+        assert!(!Arc::ptr_eq(
+            builder.compile_watcher("light".into()),
+            sibling.compile_watcher("dark".into()),
+        ));
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

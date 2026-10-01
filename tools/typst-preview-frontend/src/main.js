@@ -8,6 +8,13 @@ import "./styles/outline.css";
 
 import { wsMain, PreviewMode } from "./ws";
 import { setupDrag } from "./drag";
+import { hasTouchSelection } from "typst-dom/touch-selection.mjs";
+import {
+  DocumentThemeController,
+  themeWebSocketUrl,
+  captureReadingState,
+  createConnectionQueue,
+} from "./document-theme";
 
 const windowElem = document.getElementById("typst-container");
 windowElem.documents = [];
@@ -18,7 +25,44 @@ main();
 function main() {
   const wsArgs = retrieveWsArgs();
   const { nextWs } = buildWs();
-  window.onload = () => nextWs(wsArgs);
+  window.onload = () => {
+    if (!wsArgs.nativeTheme) return nextWs(wsArgs);
+    const select = document.createElement("select");
+    select.className = "typst-theme-selector";
+    const korean = navigator.language.startsWith("ko");
+    select.setAttribute("aria-label", korean ? "문서 테마" : "Document theme");
+    for (const [value, label] of [
+      ["system", korean ? "기기 설정" : "System"],
+      ["light", korean ? "라이트" : "Light"],
+      ["dark", korean ? "다크" : "Dark"],
+    ]) {
+      select.add(new Option(label, value));
+    }
+    document.body.appendChild(select);
+    const controller = new DocumentThemeController(
+      window.matchMedia("(prefers-color-scheme: dark)"),
+      document,
+      () => hasTouchSelection(document.getElementById("typst-app")),
+      (theme) => {
+        document.documentElement.dataset.documentTheme = theme;
+        document.documentElement.style.removeProperty("--typst-preview-background-color");
+        nextWs({
+          ...wsArgs,
+          url: themeWebSocketUrl(wsArgs.url, theme),
+          onToggleTheme: () => {
+            select.value =
+              document.documentElement.dataset.documentTheme === "dark" ? "light" : "dark";
+            controller.setPreference(select.value);
+          },
+        });
+      },
+    );
+    select.addEventListener("change", () => controller.setPreference(select.value));
+    window.addEventListener("pagehide", (event) => {
+      // A bfcache page must retain its listeners for restoration.
+      if (!event.persisted) controller.dispose();
+    });
+  };
   setupVscodeChannel(nextWs);
   setupDrag();
 }
@@ -51,26 +95,24 @@ function retrieveWsArgs() {
   }
 
   /// Return a `WsArgs` object.
-  return { url: urlObject.href, previewMode, isContentPreview: false };
+  const nativeTheme = "preview-arg:systemTheme:false".endsWith(":true");
+  return { url: urlObject.href, previewMode, isContentPreview: false, nativeTheme };
 }
 
 /// `buildWs` returns a object, which keeps track of websocket
 ///  connections.
 function buildWs() {
-  let previousDispose = Promise.resolve(() => {});
   /// `nextWs` will always hold a global unique websocket connection
   /// to the preview backend.
-  function nextWs(nextWsArgs) {
-    const previous = previousDispose;
-    previousDispose = new Promise(async (resolve) => {
-      /// Dispose the previous websocket connection.
-      await previous.then((d) => d());
-      /// Reset app mode before creating a new websocket connection.
-      resetAppMode(nextWsArgs);
-      /// Create a new websocket connection.
-      resolve(wsMain(nextWsArgs));
-    });
-  }
+  const nextWs = createConnectionQueue(wsMain, (args) => {
+    const previousDoc = windowElem.documents[0];
+    const readingState =
+      args.nativeTheme && previousDoc
+        ? captureReadingState(document.getElementById("typst-container-main"), previousDoc.impl)
+        : undefined;
+    resetAppMode(args);
+    return { ...args, readingState };
+  });
 
   return { nextWs };
 
