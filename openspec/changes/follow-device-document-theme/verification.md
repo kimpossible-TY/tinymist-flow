@@ -12,4 +12,8 @@
 
 ## Deployment
 
-Pending clean-commit bundle installation and existing URL verification. Physical iOS/iPadOS appearance and selection-handle checks remain user-side confirmation; do not treat browser emulation as that confirmation.
+- Installed 0.1.2 from clean implementation commit `d23fdee5`; engine SHA-256 `29b509504ac60d863a746eb343bd7e1f763499c384e61c2ca2f4d23e5240a613`.
+- Previous bundle preserved at `~/Library/Application Support/tinymist-flow/releases/20261001-215312-644365/tinymist-flow.app`. PDE was stopped and confirmed absent before replacement, then restarted with `--follow-system-theme`; the menu app was relaunched. Ewald was already stopped and remains stopped.
+- PDE engine PID 59245 is waiting before HTTP bind. At 21:53:14 KST, macOS TCC logged a mismatch with the previously approved app code requirement and `AUTHREQ_PROMPTING` for `kTCCServiceSystemPolicyDocumentsFolder`. Loopback HTTP has no listener and tailnet navigation fails while consent is pending. Process status alone does not establish readiness.
+- The correct updated bundle remains installed, without an automatic rollback/replacement cycle. Existing URL delivery verification (task 3.3) is pending renewed user Documents approval; no confirmed release tag was created.
+- Physical iOS/iPadOS appearance and selection-handle checks remain user-side confirmation; do not treat browser emulation as that confirmation.
