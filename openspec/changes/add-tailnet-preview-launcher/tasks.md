@@ -67,6 +67,13 @@
 - [x] 10.5 Verify document delivery from the updated installed preview.
 - [ ] 10.6 Repeat the recorded native selection gesture on iPhone; do not claim WebKit painting is fixed from unit tests.
 
+## 11. Restore the last edited location
+
+- [x] 11.1 Add project/variant-scoped atomic last-edit persistence in the compilation watcher, including disconnected viewers and safe restart handling; add Rust tests.
+- [x] 11.2 Send full-render resume hints and apply them after render without overriding theme-transition reading state; add frontend tests.
+- [x] 11.3 Enable managed profiles, document persistence separately from assistant focus, and verify launcher behavior.
+- [ ] 11.4 Build and verify edit/refresh/new-viewer/disconnected/restart behavior on temporary fixtures, then deploy and verify the existing PDE URL; record any renewed OS consent or physical-device checks.
+
 2026-09-29 regression follow-up: 32 frontend/DOM tests, both TypeScript checks, preview and release-engine builds, 8 app tests, generated-doc consistency, and strict OpenSpec validation passed. A clean-source 0.1.1 candidate is retained at `dist/mobile-selection/tinymist-flow.app`. Deployment first exposed an asynchronous stop/start race (the stopped job remained briefly visible), then an explicit TCC Documents request for the new engine: existing code requirement mismatch and AUTHREQ_PROMPTING. Do not bypass consent. Restore 0.1.0 while waiting for the user to approve a coordinated reinstall. Mobile gesture verification and final release tagging remain pending.
 
 Prior handoff state: the installed bundle was restored to 0.1.0 and its LaunchAgent restarted (PID 36841), but it did not open its HTTP listener after the outstanding consent request; HTTPS returned 502. Bundle rollback was confirmed, service recovery was not yet confirmed.

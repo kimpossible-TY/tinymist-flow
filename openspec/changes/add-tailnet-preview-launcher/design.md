@@ -74,9 +74,15 @@ For partial SVG document mode, derive the visible range from the scroll containe
 
 ## Follow the edited location
 
-Each preview connection remembers visual fingerprints of the last rendered pages and the preceding compile view. On a successful incremental compilation, compare page frames and backgrounds; emit a `change,page x y` control frame only if the paged output changed. Resolve the first changed source text against the new document when possible, and use the first changed page as a fallback. Full-current frames establish the baseline without navigating.
+Each preview connection remembers visual fingerprints of the last rendered pages and the preceding compile view. On a successful incremental compilation, compare page frames and backgrounds; emit a `change,page x y` control frame only if the paged output changed. Resolve the first changed source text against the new document when possible, and use the first changed page as a fallback. Full-current frames establish the baseline; without configured persistence they do not navigate.
 
 Send the location hint before its document delta on the same ordered SVG channel. The frontend waits for the render completion callback before finding the page rectangle, then jumps directly to its scaled page position. This works with offscreen placeholder pages and avoids animating through the entire document. A recent touch, wheel, pointer, or key gesture defers the jump and exposes a small button so the reader can navigate when ready.
+
+### Persistent last-edit restoration
+
+Standalone paged preview can opt in with `TINYMIST_PREVIEW_CHANGE_FILE`. Managed Flow profiles use a separate owner-only `changes/<profile>.json` file, never the explicit-tap focus file. A compilation watcher tracks successful visual changes even with no WebSocket clients. A shared atomic store is keyed by workspace/entry identity and keeps independent default/light/dark snapshots containing bounded page fingerprints and the last page coordinates. Matching output retains the last location across process restarts. If output changed while the server was stopped, the first changed page replaces stale coordinates. Corrupt, oversized, incompatible, or different-project records are ignored; the first baseline without history does not invent an edit.
+
+On a connection's first full-current frame, the server sends an ordered `resume,page x y` hint only when its stored fingerprints match that exact document. A shared full-render request from a new viewer must not navigate existing readers. The viewer applies the hint after rendering, with the same gesture deferral as live edits. A theme switch's captured reading state takes priority over this resume hint; later incremental edits still navigate normally. The new document location is independent of scroll position and assistant taps. No new network endpoint or port is added.
 
 ## Explicit selection context for Codex
 

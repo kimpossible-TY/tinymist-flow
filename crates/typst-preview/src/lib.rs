@@ -2,6 +2,7 @@
 #![allow(missing_docs)]
 
 mod actor;
+mod change;
 mod debug_loc;
 mod focus;
 mod outline;
@@ -208,6 +209,7 @@ impl Previewer {
                             svg.0,
                             h.webview_tx,
                             h.focus_store.is_some(),
+                            h.change_tracker.clone(),
                         );
                         tokio::spawn(render_actor.run());
                         let outline_render_actor = actor::render::OutlineRenderActor::new(
@@ -285,6 +287,7 @@ type BroadcastChannel<T> = (broadcast::Sender<T>, broadcast::Receiver<T>);
 pub struct PreviewBuilder {
     config: PreviewConfig,
     focus_store: Option<Arc<focus::FocusStore>>,
+    change_tracker: Option<Arc<change::ChangeTracker>>,
     shutdown_tx: Option<mpsc::Sender<()>>,
     renderer_mailbox: BroadcastChannel<RenderActorRequest>,
     editor_conn: MpScChannel<EditorActorRequest>,
@@ -299,6 +302,7 @@ impl PreviewBuilder {
         Self {
             config,
             focus_store: None,
+            change_tracker: None,
             shutdown_tx: None,
             renderer_mailbox: broadcast::channel(1024),
             editor_conn: mpsc::unbounded_channel(),
@@ -319,10 +323,27 @@ impl PreviewBuilder {
         Ok(self)
     }
 
+    /// Remember visual edits for new viewers and across service restarts.
+    pub fn with_change_file(
+        mut self,
+        path: PathBuf,
+        project: String,
+        variant: &str,
+    ) -> std::io::Result<Self> {
+        self.change_tracker = Some(Arc::new(change::ChangeTracker::new(
+            path, project, variant,
+        )?));
+        Ok(self)
+    }
+
     /// Create an independent rendering pipeline sharing the ordered focus store.
     pub fn sibling(&self, config: PreviewConfig) -> Self {
         let mut sibling = Self::new(config);
         sibling.focus_store = self.focus_store.clone();
+        sibling.change_tracker = self
+            .change_tracker
+            .as_ref()
+            .map(|tracker| Arc::new(tracker.sibling("dark")));
         sibling
     }
 
@@ -334,6 +355,7 @@ impl PreviewBuilder {
                 doc_sender: self.doc_sender.clone(),
                 editor_tx: self.editor_conn.0.clone(),
                 render_tx: self.renderer_mailbox.0.clone(),
+                change_tracker: self.change_tracker.clone(),
             })
         })
     }
@@ -342,6 +364,7 @@ impl PreviewBuilder {
         let PreviewBuilder {
             config,
             focus_store,
+            change_tracker,
             shutdown_tx,
             renderer_mailbox,
             editor_conn: (editor_tx, editor_rx),
@@ -370,6 +393,7 @@ impl PreviewBuilder {
         let data_plane = DataPlane {
             format: config.format,
             focus_store,
+            change_tracker,
             span_interner: span_interner.clone(),
             webview_tx: webview_tx.clone(),
             editor_tx: editor_tx.clone(),
@@ -622,6 +646,7 @@ pub struct CompileWatcher {
     doc_sender: Arc<parking_lot::RwLock<Option<Arc<dyn CompileView>>>>,
     editor_tx: mpsc::UnboundedSender<EditorActorRequest>,
     render_tx: broadcast::Sender<RenderActorRequest>,
+    change_tracker: Option<Arc<change::ChangeTracker>>,
 }
 
 impl CompileWatcher {
@@ -653,7 +678,13 @@ impl CompileWatcher {
         match status {
             CompileStatus::CompileSuccess => {
                 // it is ok to ignore the error here
-                *self.doc_sender.write() = Some(view);
+                {
+                    let mut document = self.doc_sender.write();
+                    if let Some(tracker) = &self.change_tracker {
+                        tracker.observe(&view, document.as_ref());
+                    }
+                    *document = Some(view);
+                }
 
                 // todo: is it right that ignore zero broadcast receiver?
                 let _ = self.render_tx.send(RenderActorRequest::RenderIncremental);
@@ -674,6 +705,7 @@ impl CompileWatcher {
 struct DataPlane {
     format: ExportTarget,
     focus_store: Option<Arc<focus::FocusStore>>,
+    change_tracker: Option<Arc<change::ChangeTracker>>,
     span_interner: SpanInterner,
     webview_tx: broadcast::Sender<WebviewActorRequest>,
     editor_tx: mpsc::UnboundedSender<EditorActorRequest>,

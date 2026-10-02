@@ -17,6 +17,7 @@ import { WebSocketSubject, webSocket } from "rxjs/webSocket";
 import { Subject, Subscription, buffer, debounceTime, auditTime, fromEvent, tap } from "rxjs";
 import { handleHtmlPreviewFrame } from "./html-preview";
 import type { ReadingState } from "./document-theme";
+import { ChangeLocationQueue, parseChangeLocation, type ChangeLocation } from "./change-location";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
 // for debug propose
@@ -58,7 +59,7 @@ export async function wsMain({
   let $ws: WebSocketSubject<ArrayBuffer> | undefined = undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   const subsribes: Subscription[] = [];
-  let queueChangedLocation: ((location: [number, number, number]) => void) | undefined;
+  let queueChangedLocation: ((location: ChangeLocation, resume: boolean) => void) | undefined;
   let clearChangedLocation: (() => void) | undefined;
   let focusRevision: string | undefined;
   let pendingFocusRevision: string | undefined;
@@ -118,8 +119,7 @@ export async function wsMain({
     }
 
     if (previewMode === PreviewMode.Doc && !isContentPreview) {
-      let pendingChange: [number, number, number] | undefined;
-      let lastChange: [number, number, number] | undefined;
+      const changedLocations = new ChangeLocationQueue(Boolean(readingState));
       let lastUserGesture = -Infinity;
       const changeButton = document.createElement("button");
       changeButton.type = "button";
@@ -155,7 +155,7 @@ export async function wsMain({
         changeButton.hidden = false;
       };
       changeButton.addEventListener("click", () => {
-        if (lastChange) jumpToChange(lastChange);
+        if (changedLocations.lastLocation) jumpToChange(changedLocations.lastLocation);
         changeButton.hidden = true;
       });
 
@@ -167,22 +167,20 @@ export async function wsMain({
       resizeTarget.addEventListener("wheel", markUserGesture, { passive: true });
       document.addEventListener("keydown", markUserGesture);
 
-      queueChangedLocation = (location) => {
-        pendingChange = location;
+      queueChangedLocation = (location, resume) => {
+        changedLocations.queue(location, resume);
       };
       clearChangedLocation = () => {
-        pendingChange = undefined;
-        lastChange = undefined;
+        changedLocations.clear();
         changeButton.hidden = true;
       };
       svgDoc.impl.onDidRender = () => {
-        if (!pendingChange) return;
-        lastChange = pendingChange;
-        pendingChange = undefined;
-        if (performance.now() - lastUserGesture < 2500) {
+        const change = changedLocations.afterRender(performance.now(), lastUserGesture);
+        if (!change) return;
+        if (change.deferred) {
           showChangeButton();
         } else {
-          jumpToChange(lastChange);
+          jumpToChange(change.location);
           changeButton.hidden = true;
         }
       };
@@ -599,15 +597,9 @@ export async function wsMain({
         }
       }
 
-      if (message[0] === "change") {
-        const location = dec
-          .decode(message[1] as Uint8Array)
-          .trim()
-          .split(/\s+/)
-          .map(Number);
-        if (location.length === 3 && location.every(Number.isFinite) && location[0] >= 1) {
-          queueChangedLocation?.(location as [number, number, number]);
-        }
+      if (message[0] === "change" || message[0] === "resume") {
+        const location = parseChangeLocation(dec.decode(message[1] as Uint8Array));
+        if (location) queueChangedLocation?.(location, message[0] === "resume");
         return;
       }
 

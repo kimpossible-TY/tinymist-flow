@@ -26,6 +26,14 @@ Documents must choose their native palette from `sys.inputs.at("theme", default:
 
 For standalone paged preview, enable this with `tinymist preview main.typ --follow-system-theme`. This overrides an explicit `--input theme=...`; unrelated inputs remain unchanged. Without the flag, preview keeps its existing behavior. HTML and bundle outputs do not support this option. Compiling both variants uses additional host memory and CPU.
 
+== Resume the last edited location
+
+Managed previews remember the latest successful visual edit, even while no browser is connected. Opening or refreshing the preview returns to that position after the document renders. A recent reader gesture defers navigation and shows Jump to change (변경 위치로). Switching the document palette keeps the current reading position instead; later live edits still follow their changed locations.
+
+Each profile stores one private `changes/<profile-id>.json` record under the app's Application Support directory, independently of explicit assistant taps. Unchanged output retains its position across service restarts. If output changed while the service was stopped, the first changed page is used instead of stale coordinates. Missing or invalid history establishes a baseline without guessing an earlier edit. Comments or other edits that do not change rendered output do not change the saved position.
+
+Standalone paged preview can opt in by setting `TINYMIST_PREVIEW_CHANGE_FILE` to an absolute path. Records are scoped to the project root and entry file, with separate light and dark positions. This does not save a reader's scroll history or expose a new network endpoint.
+
 = Files and ownership
 
 - App and installed engine: `~/Applications/tinymist-flow.app`

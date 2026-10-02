@@ -34,6 +34,7 @@ struct Profile: Codable {
     var publicURL: String
     var label: String
     var focusFile: String { support.appendingPathComponent("focus/\(id).json").path }
+    var changeFile: String { support.appendingPathComponent("changes/\(id).json").path }
     var url: String { publicURL.isEmpty ? "http://127.0.0.1:\(port)/" : publicURL }
     func path(_ relative: String) -> String {
         (relative.hasPrefix("/") ? URL(fileURLWithPath: relative) : URL(fileURLWithPath: root).appendingPathComponent(relative)).standardizedFileURL.path
@@ -66,7 +67,7 @@ struct Profile: Codable {
         return args
     }
     func environment() -> [String: String] {
-        var env = ["TINYMIST_PREVIEW_FOCUS_FILE": focusFile]
+        var env = ["TINYMIST_PREVIEW_FOCUS_FILE": focusFile, "TINYMIST_PREVIEW_CHANGE_FILE": changeFile]
         if !publicURL.isEmpty { env["TINYMIST_ALLOWED_ORIGINS"] = String(publicURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) }
         return env
     }

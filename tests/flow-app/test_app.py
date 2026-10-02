@@ -37,6 +37,7 @@ class Profiles(unittest.TestCase):
         self.assertEqual(plan['agent']['ProgramArguments'][1:], ['--serve', 'test'])
         self.assertIn(package.APP_ID, plan['agent']['AssociatedBundleIdentifiers'])
         self.assertTrue(plan['environment']['TINYMIST_PREVIEW_FOCUS_FILE'].endswith('/data/focus/test.json'))
+        self.assertTrue(plan['environment']['TINYMIST_PREVIEW_CHANGE_FILE'].endswith('/data/changes/test.json'))
     def test_duplicate_port_rejected(self):
         second = dict(self.profile, id='second', label='com.example.second')
         self.config([self.profile, second]); self.assertNotEqual(self.cli('--check-config').returncode, 0)

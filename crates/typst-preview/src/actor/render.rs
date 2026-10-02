@@ -47,7 +47,9 @@ pub struct RenderActor {
     webview_sender: broadcast::Sender<WebviewActorRequest>,
     previous_view: Option<Arc<dyn CompileView>>,
     previous_page_hashes: Option<Vec<u64>>,
+    has_sent_full: bool,
     focus_enabled: bool,
+    change_tracker: Option<Arc<crate::change::ChangeTracker>>,
 }
 
 impl RenderActor {
@@ -58,6 +60,7 @@ impl RenderActor {
         svg_sender: mpsc::UnboundedSender<Vec<u8>>,
         webview_sender: broadcast::Sender<WebviewActorRequest>,
         focus_enabled: bool,
+        change_tracker: Option<Arc<crate::change::ChangeTracker>>,
     ) -> Self {
         Self {
             mailbox,
@@ -68,7 +71,9 @@ impl RenderActor {
             webview_sender,
             previous_view: None,
             previous_page_hashes: None,
+            has_sent_full: false,
             focus_enabled,
+            change_tracker,
         }
     }
 
@@ -160,6 +165,12 @@ impl RenderActor {
                     .unwrap_or_default();
                 let location = if has_incremental_render && !has_full_render {
                     self.change_location(&view, &changed_pages)
+                } else if has_full_render && !self.has_sent_full {
+                    self.change_tracker.as_ref().and_then(|tracker| {
+                        page_hashes
+                            .as_ref()
+                            .and_then(|hashes| tracker.position(hashes))
+                    })
                 } else {
                     None
                 };
@@ -171,10 +182,12 @@ impl RenderActor {
             };
 
             let data = self.render(has_full_render, &document);
+            self.has_sent_full |= has_full_render;
             if let Some((page, x, y)) = change_location {
                 // Queue the hint ahead of its document delta. The frontend
                 // applies it only after that delta has finished rendering.
-                let hint = format!("change,{page} {x} {y}").into_bytes();
+                let kind = if has_full_render { "resume" } else { "change" };
+                let hint = format!("{kind},{page} {x} {y}").into_bytes();
                 if self.svg_sender.send(hint).is_err() {
                     log::info!("RenderActor: svg_sender is dropped");
                     break;
@@ -196,7 +209,7 @@ impl RenderActor {
         }
     }
 
-    fn page_hashes(document: &TypstDocument) -> Option<Vec<u64>> {
+    pub(crate) fn page_hashes(document: &TypstDocument) -> Option<Vec<u64>> {
         let TypstDocument::Paged(document) = document else {
             return None;
         };
@@ -259,7 +272,7 @@ impl RenderActor {
         }
     }
 
-    fn changed_pages(old: &[u64], new: &[u64]) -> Vec<usize> {
+    pub(crate) fn changed_pages(old: &[u64], new: &[u64]) -> Vec<usize> {
         let mut changed: Vec<_> = new
             .iter()
             .enumerate()
@@ -276,16 +289,7 @@ impl RenderActor {
         view: &Arc<dyn CompileView>,
         changed_pages: &[usize],
     ) -> Option<(usize, f64, f64)> {
-        let first_changed = *changed_pages.first()?;
-        if let Some(previous) = &self.previous_view {
-            for position in view.changed_document_positions(previous.as_ref()) {
-                let page = position.page.get();
-                if changed_pages.contains(&page) {
-                    return Some((page, position.point.x.to_pt(), position.point.y.to_pt()));
-                }
-            }
-        }
-        Some((first_changed, 0.0, 0.0))
+        crate::change::resolve_change(view, self.previous_view.as_ref(), changed_pages)
     }
 
     #[typst_macros::time]

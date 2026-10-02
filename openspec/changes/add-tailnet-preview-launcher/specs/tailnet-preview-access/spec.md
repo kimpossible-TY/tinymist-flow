@@ -74,9 +74,41 @@ On a successful incremental compilation that changes paged output, document prev
 
 #### Scenario: Load or scroll while an update arrives
 - **WHEN** the preview initially loads or reconnects
-- **THEN** it does not navigate because of that full render
+- **THEN** it does not treat that full render as a new edit
 - **WHEN** the user is actively scrolling as a changed page arrives
 - **THEN** the scroll position remains under the user's control and a change navigation button appears
+
+### Requirement: Restore the last visual edit on a new preview connection
+Configured standalone paged preview SHALL persist the last visual edit per project and document variant independently of connected viewers and explicit assistant selections. A new or refreshed viewer SHALL restore the stored location after its matching full document renders. Managed Flow profiles SHALL enable this behavior without changing registered URLs.
+
+#### Scenario: Refresh after an edit
+- **WHEN** a successful compilation changes a distant page and the reader refreshes or opens a new viewer
+- **THEN** the viewer returns to the saved edit after rendering
+- **AND** a recent user gesture defers navigation with a change button
+
+#### Scenario: Edit while no viewer is connected
+- **WHEN** source edits change paged output while all viewers are disconnected
+- **THEN** the server records the changed location
+- **AND** the next viewer restores it
+
+#### Scenario: Restart and stale output
+- **WHEN** the service restarts with unchanged paged output
+- **THEN** its last edited position remains available
+- **WHEN** output changed while the service was stopped
+- **THEN** it uses the first changed page rather than stale coordinates
+- **AND** invalid or different-project records do not cause navigation
+
+#### Scenario: A new viewer does not move an existing reader
+- **WHEN** a new viewer requests its initial document
+- **THEN** only that new connection receives last-edit restoration
+- **AND** existing viewers retain their reading location
+
+#### Scenario: No saved history or a palette transition
+- **WHEN** no valid previous snapshot exists
+- **THEN** the first compilation establishes a baseline without guessing an edit
+- **WHEN** an existing viewer switches theme with captured reading state
+- **THEN** that reading state takes priority over last-edit restoration
+- **AND** subsequent live source edits still follow their changed locations
 
 ### Requirement: Explicit selections can supply local assistant context
 When a standalone preview is configured with `TINYMIST_PREVIEW_FOCUS_FILE`, it SHALL atomically persist the latest explicit document selection with owner-only permissions. The record SHALL include time, viewer identity, compiler revision, page/coordinates, and a bounded source excerpt when mapped. The browser SHALL acknowledge successful persistence.

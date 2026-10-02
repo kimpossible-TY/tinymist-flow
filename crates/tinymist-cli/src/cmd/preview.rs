@@ -69,6 +69,33 @@ pub async fn preview_main(mut args: PreviewCliArgs) -> Result<()> {
         }
         None => previewer,
     };
+    let previewer = match std::env::var_os("TINYMIST_PREVIEW_CHANGE_FILE") {
+        Some(path) => {
+            if !matches!(preview_target, ExportTarget::Paged) {
+                bail!("preview change restoration requires paged output");
+            }
+            let entry = verse
+                .entry_file()
+                .and_then(|path| path.to_err().ok())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("preview change restoration requires a local entry")
+                })?;
+            let root = verse.entry_state().root().map(|root| root.to_path_buf());
+            let project = serde_json::to_string(&(root, entry)).map_err(anyhow::Error::from)?;
+            previewer
+                .with_change_file(
+                    path.into(),
+                    project,
+                    if args.follow_system_theme {
+                        "light"
+                    } else {
+                        "default"
+                    },
+                )
+                .map_err(anyhow::Error::from)?
+        }
+        None => previewer,
+    };
     let dark_builder = dark_inputs.as_ref().map(|_| previewer.sibling(config));
 
     let (service, handle, dark_handle) = {
