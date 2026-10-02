@@ -14,4 +14,4 @@
 
 - [x] 3.1 Enable managed previews and document the input contract; verify launcher tests and generated-doc consistency.
 - [x] 3.2 Build frontend and release engine; verify targeted Rust tests, formatting, and runtime edits/focus for both palettes.
-- [ ] 3.3 Install the validated bundled app and verify existing preview URLs; record any remaining OS consent or physical-device checks explicitly.
+- [x] 3.3 Install the validated bundled app and verify existing preview URLs; record any remaining OS consent or physical-device checks explicitly.
