@@ -198,11 +198,14 @@ def run_engine(engine: Path, label: str, args):
         env = dict(os.environ, TINYMIST_PREVIEW_FOCUS_FILE=str(focus))
         # Never inherit the real service's reading-position persistence file.
         env.pop("TINYMIST_PREVIEW_CHANGE_FILE", None)
-        command = [str(engine), "--log-filter", "info", "preview", str(document),
+        # A global `info` does not override the CLI's more specific tinymist
+        # warning filter. Count compiler events with an explicit target filter.
+        log_filter = "tinymist_project::compiler=info,tinymist::compat::preview=info"
+        command = [str(engine), "--log-filter", log_filter, "preview", str(document),
                    "--root", str(root), "--follow-system-theme", "--no-open",
                    "--data-plane-host=127.0.0.1:0", "--control-plane-host=127.0.0.1:0"]
         viewers = []
-        result = {"label": label, "engine": str(engine), "stages": []}
+        result = {"label": label, "engine": str(engine), "log_filter": log_filter, "stages": []}
         with log.open("wb") as output:
             process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, env=env)
             try:

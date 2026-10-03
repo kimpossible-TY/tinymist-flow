@@ -391,6 +391,10 @@ fn test_help_preview() {
               relative to the current working directory (PWD)
 
     Options:
+          --follow-system-theme
+              Follow each viewer's device theme using sys.inputs.theme (light/dark). Requires paged
+              output; overrides any explicit theme input
+
           --format <FORMAT>
               Configure the preview output format.
               

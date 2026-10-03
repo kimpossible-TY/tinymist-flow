@@ -88,12 +88,22 @@ python3 tests/perf/incremental-performance/preview_demand.py \
   --output /path/to/results/preview-demand.json
 ```
 
-The PDE replay uses an isolated snapshot and modifies only in-memory documents:
+The PDE replay uses an isolated snapshot and modifies only in-memory documents.
+Run the two binaries sequentially against the same snapshot, then compare their
+recorded results:
 
 ```sh
 python3 tests/perf/incremental-performance/book_replay.py \
-  --binary /path/to/engine --book /path/to/book-snapshot \
-  --output /path/to/results/engine --modes compile mixed --rounds 6
+  --binary /path/to/baseline --book /path/to/book-snapshot \
+  --output /path/to/results/baseline --modes compile mixed --rounds 6 \
+  --timeout 300 --max-footprint-gib 5
+python3 tests/perf/incremental-performance/book_replay.py \
+  --binary /path/to/candidate --book /path/to/book-snapshot \
+  --output /path/to/results/candidate --modes compile mixed --rounds 6 \
+  --timeout 300 --max-footprint-gib 5
+python3 tests/perf/incremental-performance/book_replay.py \
+  --compare /path/to/results/baseline /path/to/results/candidate \
+  --output /path/to/results/comparison
 ```
 
 Replay output records exact protocol replies, input hashes, receipt times,
@@ -110,9 +120,73 @@ diagnostic conversion and publication. Word-count status repeats and older
 compilation notifications cannot satisfy this endpoint. The probe is never
 written to the book snapshot or the user's sources.
 
+Both runs must complete without a footprint-limit stop, and their input hashes,
+token legends and comparable protocol responses must agree before interpreting
+latency changes. Six rounds provide a small exploratory sample; retain the raw
+values and report the median and range. A p95 from six observations is effectively
+the largest sample. Close results need more rounds or a reversed execution order.
+
+== Validation commands
+
+Run these commands from the repository root. The shared Cargo environment used
+on the 8 GiB Mac limits build concurrency and debug-data growth:
+
+```sh
+export CARGO_BUILD_JOBS=2
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_INCREMENTAL=0
+```
+
+Native compiler, preview and language-server library tests:
+
+```sh
+cargo test --locked \
+  -p tinymist-project -p tinymist-preview -p tinymist \
+  --features tinymist/system,tinymist/preview,tinymist/export,tinymist/trace \
+  --lib
+```
+
+Strict Clippy for all targets in the affected native crates:
+
+```sh
+cargo clippy --locked \
+  -p tinymist-cli -p tinymist -p tinymist-project \
+  -p tinymist-preview -p tinymist-std \
+  --all-targets -- -D warnings
+```
+
+Minimal, preview and web feature checks compile the library on the host:
+
+```sh
+cargo clippy --locked -p tinymist --lib --no-default-features \
+  --features no-content-hint -- -D warnings
+cargo clippy --locked -p tinymist --lib --no-default-features \
+  --features no-content-hint,preview -- -D warnings
+cargo clippy --locked -p tinymist --lib --no-default-features \
+  --features no-content-hint,web -- -D warnings
+```
+
+The patched comemo package, formatting and macOS app unit tests:
+
+```sh
+cargo test --locked -p comemo
+cargo clippy --locked -p comemo --all-features --all-targets -- -D warnings
+cargo fmt --all -- --check
+python3 -m unittest discover -s tests/flow-app -p 'test_*.py' -v
+```
+
+The end-to-end suite uses the engine already staged at
+`editors/vscode/out/tinymist`. Stage the binary being evaluated before running
+the suite; this command does not build or select that engine:
+
+```sh
+INSTA_UPDATE=no cargo test --locked -p tests
+```
+
 == Validation results
 
-Native library tests passed: 95 language-server, 10 preview and 29 project
+Native library tests passed: 95 language-server, 11 preview and 29 project
 tests, with eight pre-existing ignored cases. Three macOS scheduling/memory
 tests and 31 comemo unit, integration and documentation tests also passed.
 Strict Clippy passed for affected native crates and the minimal, preview and

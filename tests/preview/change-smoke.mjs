@@ -49,6 +49,7 @@ async function start(entry = input) {
     {
       env: {
         ...process.env,
+        TINYMIST_LOG: "tinymist_project::compiler=info,tinymist_preview=info",
         TINYMIST_PREVIEW_CHANGE_FILE: changeFile,
         TINYMIST_PREVIEW_FOCUS_FILE: resolve(temp, "focus.json"),
       },
@@ -160,14 +161,40 @@ try {
     "a new viewer must not navigate an existing reader",
   );
   const baseline = JSON.stringify((await record()).variants);
+  const darkRevision = lastHint(dark, "focus-revision").payload.toString();
   for (const socket of sockets.splice(0)) socket.terminate();
   await delay(200);
   await writeFile(passage, "Edited with all viewers disconnected.\n");
-  await until(
-    async () => JSON.stringify((await record())?.variants) !== baseline,
-    "disconnected edit persistence",
+  await delay(500);
+  assert.equal(
+    JSON.stringify((await record()).variants),
+    baseline,
+    "unviewed variants defer compiling and persisting edits until a viewer returns",
   );
-  assertResume(await connect("dark"));
+  const resumedDark = await connect("dark");
+  assertResume(resumedDark);
+  await until(
+    async () =>
+      JSON.stringify((await record())?.variants.dark) !== JSON.stringify(JSON.parse(baseline).dark),
+    "reconnected variant compiles and persists the offline edit",
+  );
+  await until(
+    () => lastHint(resumedDark, "focus-revision")?.payload.toString() !== darkRevision,
+    "offline edit revision delivered to reconnected viewer",
+  );
+  const latestRevision = resumedDark.messages.indexOf(lastHint(resumedDark, "focus-revision"));
+  await until(
+    () => resumedDark.messages.slice(latestRevision + 1).some((x) => x.type === "new" || x.type === "diff-v1"),
+    "offline edit document follows its revision",
+  );
+  if (lastHint(resumedDark, "change")) {
+    assert.equal(Number(lastHint(resumedDark, "change").payload.toString().split(" ")[0]), 120);
+  }
+  assert.equal(
+    JSON.stringify((await record()).variants.light),
+    JSON.stringify(JSON.parse(baseline).light),
+    "still-unviewed light variant retains its previous successful baseline",
+  );
   await stop();
   await start();
   assertResume(await connect("light"));

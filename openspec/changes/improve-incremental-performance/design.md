@@ -21,6 +21,10 @@ pending reasons remain available while idle. Reconnection compiles or reuses a
 result only when it matches current inputs. Multiple viewers of one palette share
 one compiler. Active viewers of both palettes retain independent current outputs.
 Origin checks, focus mapping, and saved reading state keep their existing meaning.
+If a viewer requests its initial full frame before the first compilation finishes,
+the renderer retains that request until a document becomes available. The saved
+resume hint precedes that full frame. Offline edits are compiled on reconnect;
+an unviewed palette keeps its last successful baseline until it is demanded.
 
 ## Expensive results
 

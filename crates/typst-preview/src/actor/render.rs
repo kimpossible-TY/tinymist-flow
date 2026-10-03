@@ -113,8 +113,9 @@ impl RenderActor {
     }
 
     pub async fn run(mut self) {
+        let mut pending_full_render = false;
         loop {
-            let mut has_full_render = false;
+            let mut has_full_render = pending_full_render;
             let mut has_incremental_render = false;
             log::debug!("RenderActor: waiting for message");
             match self.mailbox.recv().await {
@@ -138,6 +139,10 @@ impl RenderActor {
             // if a full render is requested, we render the latest document
             // otherwise, we render the incremental changes for only once
             let has_full_render = has_full_render;
+            // A demand-driven compiler may not have produced its first document
+            // when the viewer asks for `current`. Keep that request so the first
+            // successful compile includes the full frame and saved resume hint.
+            pending_full_render = has_full_render;
             log::debug!("RenderActor: has_full_render: {has_full_render}");
             let Some(view) = self.view.read().clone() else {
                 log::info!("RenderActor: document is not ready");
@@ -147,6 +152,7 @@ impl RenderActor {
                 log::info!("RenderActor: document is not ready");
                 continue;
             };
+            pending_full_render = false;
 
             if self.focus_enabled {
                 let hint = format!("focus-revision,{}", view.revision()).into_bytes();
@@ -490,5 +496,106 @@ impl OutlineRenderActor {
                 crate::outline::outline(interner, document)
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CompileStatus;
+    use crate::change::ChangeTracker;
+    use tinymist_std::typst::TypstPagedDocument;
+
+    struct View(TypstDocument);
+
+    impl CompileView for View {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn doc(&self) -> Option<TypstDocument> {
+            Some(self.0.clone())
+        }
+
+        fn status(&self) -> CompileStatus {
+            CompileStatus::CompileSuccess
+        }
+
+        fn is_on_saved(&self) -> bool {
+            true
+        }
+
+        fn is_by_entry_update(&self) -> bool {
+            false
+        }
+    }
+
+    fn document(source: &str) -> Arc<dyn CompileView> {
+        tinymist_tests::run_with_sources(source, |verse, _| {
+            let document = typst::compile::<TypstPagedDocument>(&verse.snapshot())
+                .output
+                .unwrap();
+            Arc::new(View(TypstDocument::Paged(Arc::new(document)))) as Arc<dyn CompileView>
+        })
+    }
+
+    #[tokio::test]
+    async fn current_before_first_compile_preserves_full_frame_and_resume_order() {
+        let path = std::env::temp_dir().join(format!(
+            "tinymist-pending-current-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let tracker =
+            Arc::new(ChangeTracker::new(path.clone(), "project".into(), "light").unwrap());
+        let before = document("First\n#pagebreak()\nBefore");
+        let after = document("First\n#pagebreak()\nAfter");
+        tracker.observe(&before, None);
+        tracker.observe(&after, Some(&before));
+
+        let (signal, mailbox) = broadcast::channel(16);
+        let view = Arc::new(parking_lot::RwLock::new(None));
+        let (editor, _editor_rx) = mpsc::unbounded_channel();
+        let (svg, mut frames) = mpsc::unbounded_channel();
+        let (webview, _webview_rx) = broadcast::channel(16);
+        let actor = RenderActor::new(
+            mailbox,
+            view.clone(),
+            editor,
+            svg,
+            webview,
+            false,
+            Some(tracker),
+        );
+        let task = tokio::spawn(actor.run());
+        signal.send(RenderActorRequest::RenderFullLatest).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !signal.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("renderer should consume the initial current request without a document");
+        assert!(frames.try_recv().is_err());
+
+        *view.write() = Some(after);
+        signal.send(RenderActorRequest::RenderIncremental).unwrap();
+        let hint = tokio::time::timeout(std::time::Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(hint, b"resume,2 0 0");
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frame.starts_with(protocol::NEW_PREFIX));
+        assert!(frame.len() > protocol::NEW_PREFIX.len());
+        drop(signal);
+        task.await.unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 }
