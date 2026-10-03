@@ -37,6 +37,11 @@ Manual cache clearing must bypass extended retention. Memory pressure may reduce
 the budget; unavailable pressure information must have a documented fallback.
 Remove expired entries under the cache lock and run their destructors after
 releasing it to avoid blocking unrelated lookups.
+Keep retention reservations in a sparse per-function side table rather than in
+every ordinary cache entry. Cache positive and negative policy lookups per
+function and invalidate them on new policy registrations. Temporary detachment
+storage is proportional to the removed values and calls, outside the logical
+protected-payload budget.
 Report cumulative eligible expensive-computation counts and elapsed body times,
 including computations whose outputs exceed the retention budget. Count protected
 cache hits separately. Exclude errors, tracked dependencies and mutable calls;
@@ -45,8 +50,10 @@ these measurements are neither whole-cache hit rates nor wall-clock time savings
 ## Apple Silicon
 
 Use native ARM builds and operating-system QoS hints, not CPU affinity. Interactive
-compilation and semantic analysis receive user-initiated QoS; maintenance receives
-utility QoS. Scoped changes restore the worker's previous class. Parallel Rayon
+compilation and semantic analysis receive user-initiated QoS. Maintenance receives
+utility QoS under normal or unknown memory pressure and user-initiated QoS under
+warning or critical pressure. Each sweep observes pressure before choosing its
+class. Scoped changes restore the worker's previous class. Parallel Rayon
 workers receive an interactive baseline so work stealing does not silently move
 layout work to a differently classified pool. Other platforms keep their existing
 behavior. Report physical footprint and memory pressure on macOS where supported.

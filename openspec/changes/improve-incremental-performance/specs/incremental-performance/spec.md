@@ -42,3 +42,8 @@ values SHALL be destroyed outside cache write locks.
 Native macOS workers SHALL distinguish interactive work from cache maintenance
 using QoS and restore scoped changes when work completes. Performance observations
 SHALL distinguish process memory from per-operation allocation claims.
+
+#### Scenario: Memory reclamation becomes urgent
+- **WHEN** macOS reports warning or critical memory pressure before a cache sweep
+- **THEN** that sweep receives interactive priority and a reduced retention budget
+- **AND** the worker's previous priority is restored after the sweep.

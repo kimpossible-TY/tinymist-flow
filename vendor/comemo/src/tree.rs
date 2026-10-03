@@ -58,12 +58,16 @@ impl<C, T> CallTree<C, T> {
 
 impl<C: Hash, T> CallTree<C, T> {
     /// Retrieves the output value for the given key and oracle.
-    pub fn get(&self, key: u128, mut oracle: impl FnMut(&C) -> u128) -> Option<&T> {
+    pub fn get(
+        &self,
+        key: u128,
+        mut oracle: impl FnMut(&C) -> u128,
+    ) -> Option<(LeafId, &T)> {
         let mut cursor = *self.start.get(&key)?;
         loop {
             match cursor.kind() {
                 NodeIdKind::Leaf(id) => {
-                    return Some(&self.leaves[id].value);
+                    return Some((id, &self.leaves[id].value));
                 }
                 NodeIdKind::Inner(id) => {
                     let call = &self.inner[id].call;
@@ -84,7 +88,7 @@ impl<C: Hash, T> CallTree<C, T> {
         key: u128,
         mut sequence: CallSequence<C>,
         value: T,
-    ) -> Result<(), InsertError> {
+    ) -> Result<LeafId, InsertError> {
         let mut cursor = self.start.get(&key).copied();
         let mut predecessor = None;
 
@@ -133,13 +137,12 @@ impl<C: Hash, T> CallTree<C, T> {
             return Err(InsertError::AlreadyExists);
         }
 
-        let target = NodeId::leaf(
-            self.leaves
-                .insert(LeafNode { value, parent: predecessor.map(|(id, _)| id) }),
-        );
-        self.link(cursor.is_none(), key, predecessor, target);
+        let id = self
+            .leaves
+            .insert(LeafNode { value, parent: predecessor.map(|(id, _)| id) });
+        self.link(cursor.is_none(), key, predecessor, NodeId::leaf(id));
 
-        Ok(())
+        Ok(id)
     }
 
     /// Creates a new link between two nodes.
@@ -163,15 +166,18 @@ impl<C: Hash, T> CallTree<C, T> {
 impl<C, T> CallTree<C, T> {
     /// Removes all call sequences from the tree for whose values the predicate
     /// returns `false`.
-    pub fn retain(&mut self, mut f: impl FnMut(&mut T) -> bool) -> Removed<C, T> {
+    pub fn retain(&mut self, mut f: impl FnMut(LeafId, &mut T) -> bool) -> Removed<C, T> {
         let mut removed = Removed { calls: Vec::new(), values: Vec::new() };
         // Detach values and calls rather than dropping them under the caller's
         // cache write lock. The returned owner must be dropped after unlocking.
         let expired: Vec<_> = self
             .leaves
             .iter_mut()
-            .filter_map(|(id, node)| (!f(&mut node.value)).then_some(id))
+            .filter_map(|(id, node)| (!f(id, &mut node.value)).then_some(id))
             .collect();
+        // Each expired value is moved exactly once, without geometric buffer
+        // growth while the caller holds the cache lock.
+        removed.values.reserve_exact(expired.len());
         for id in expired {
             let node = self.leaves.remove(id);
             removed.values.push(node.value);
@@ -278,7 +284,7 @@ enum NodeIdKind {
 }
 
 type InnerId = usize;
-type LeafId = usize;
+pub(crate) type LeafId = usize;
 
 /// An error that can occur during insertion of a call sequence into the call
 /// tree.
@@ -398,7 +404,7 @@ mod tests {
                 Op::IgnoreInsertErrors => ignore_insert_errors = true,
                 Op::Insert(key, seq, value) => {
                     match tree.insert(key, seq.iter().cloned().collect(), value.clone()) {
-                        Ok(()) => kept.push((
+                        Ok(_) => kept.push((
                             key,
                             seq.iter().map(|(k, v)| (k.clone(), *v)).collect(),
                             value.clone(),
@@ -408,11 +414,11 @@ mod tests {
                     }
                 }
                 Op::Retain(f) => {
-                    tree.retain(|v| f(v));
+                    tree.retain(|_, v| f(v));
                     kept.retain_mut(|(key, map, v)| {
                         let keep = f(v);
                         if !keep {
-                            assert_eq!(tree.get(*key, |s| map[s]), None);
+                            assert_eq!(tree.get(*key, |s| map[s]).map(|(_, v)| v), None);
                         }
                         keep
                     });
@@ -423,7 +429,7 @@ mod tests {
             tree.assert_consistency();
 
             for (key, map, value) in &kept {
-                assert_eq!(tree.get(*key, |s| map[s]), Some(value));
+                assert_eq!(tree.get(*key, |s| map[s]).map(|(_, v)| v), Some(value));
             }
         }
     }

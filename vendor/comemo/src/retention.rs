@@ -10,6 +10,9 @@ use parking_lot::{Mutex, RwLock};
 
 static POLICIES: LazyLock<RwLock<HashMap<TypeId, Arc<RegisteredPolicy>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+// Changed only while holding POLICIES.write(); a cached miss is valid until a
+// new output type is registered. Updating an existing budget needs no refresh.
+static POLICY_GENERATION: AtomicUsize = AtomicUsize::new(0);
 
 /// Limits for retaining expensive results beyond the ordinary eviction age.
 ///
@@ -83,6 +86,7 @@ pub fn retain_expensive<T: 'static>(
             hits: AtomicUsize::new(0),
         }),
     );
+    POLICY_GENERATION.fetch_add(1, Ordering::Release);
     true
 }
 
@@ -173,20 +177,60 @@ impl Drop for Reservation {
     }
 }
 
+/// A function cache's positive or negative policy lookup. Ordinary misses only
+/// compare a generation under the cache's existing read lock, without locking
+/// or hashing in the global registry. Late registration invalidates negatives.
+#[derive(Default)]
+pub(crate) struct CachedPolicy {
+    generation: usize,
+    policy: Option<PolicyHandle>,
+}
+
+impl CachedPolicy {
+    /// None means that the registry changed and this cache needs a refresh.
+    /// Some(None) is a current negative lookup and needs no global access.
+    pub(crate) fn get(&self) -> Option<Option<PolicyHandle>> {
+        (self.generation == POLICY_GENERATION.load(Ordering::Acquire))
+            .then(|| self.policy.clone())
+    }
+
+    /// Refresh while the caller holds its function cache's write lock.
+    pub(crate) fn refresh<T: 'static>(&mut self) -> Option<PolicyHandle> {
+        // Another miss may already have refreshed while we waited for the lock.
+        if let Some(policy) = self.get() {
+            return policy;
+        }
+        let policies = POLICIES.read();
+        self.policy = policies.get(&TypeId::of::<T>()).cloned().map(PolicyHandle);
+        // Registration updates the generation before releasing its write lock,
+        // so this snapshot's generation and policy always describe one state.
+        self.generation = POLICY_GENERATION.load(Ordering::Acquire);
+        self.policy.clone()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct PolicyHandle(Arc<RegisteredPolicy>);
+
+impl PolicyHandle {
+    pub(crate) fn start(self) -> Option<Measurement> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Some(Measurement { policy: self.0, start: std::time::Instant::now() })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Consume the handle even though this target has no elapsed clock.
+            let _policy = self.0;
+            None
+        }
+    }
+}
+
 pub(crate) struct Measurement {
     policy: Arc<RegisteredPolicy>,
     #[cfg(not(target_arch = "wasm32"))]
     start: std::time::Instant,
-}
-
-pub(crate) fn start<T: 'static>() -> Option<Measurement> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let policy = POLICIES.read().get(&TypeId::of::<T>())?.clone();
-        Some(Measurement { policy, start: std::time::Instant::now() })
-    }
-    #[cfg(target_arch = "wasm32")]
-    None
 }
 
 impl Measurement {
@@ -231,5 +275,65 @@ impl MeasuredOutput {
             policy: self.policy,
             payload_bytes: self.payload_bytes,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn cached_negative_and_positive_policies_refresh_on_registration_only() {
+        struct Output;
+        let mut cached = CachedPolicy::default();
+        assert!(cached.refresh::<Output>().is_none());
+        let generation = cached.generation;
+        assert!(cached.get().unwrap().is_none());
+        assert!(cached.refresh::<Output>().is_none());
+        assert_eq!(cached.generation, generation);
+        assert_cached_lookup_avoids_registry_lock(&cached);
+
+        let policy = RetentionPolicy {
+            min_compute_time: Duration::ZERO,
+            max_age: 4,
+            max_entries: 1,
+            max_payload_bytes: 8,
+        };
+        assert!(retain_expensive::<Output>(policy, |_| Some(1)));
+        assert!(cached.get().is_none(), "registration must invalidate a negative");
+        let registered = cached.refresh::<Output>().unwrap();
+        assert!(Arc::ptr_eq(&registered.0, &cached.get().unwrap().unwrap().0));
+        assert_cached_lookup_avoids_registry_lock(&cached);
+        let generation = cached.generation;
+        assert!(!retain_expensive::<Output>(policy, |_| Some(2)));
+        assert!(set_retention_limits::<Output>(0, 0));
+        assert_eq!(cached.generation, generation);
+        assert!(cached.get().unwrap().is_some());
+        assert!(
+            registered
+                .start()
+                .unwrap()
+                .finish(&Output)
+                .unwrap()
+                .reserve()
+                .is_none(),
+            "the cached handle must observe reduced live limits"
+        );
+    }
+
+    fn assert_cached_lookup_avoids_registry_lock(cached: &CachedPolicy) {
+        std::thread::scope(|scope| {
+            let registry = POLICIES.write();
+            let (sent, received) = std::sync::mpsc::channel();
+            let reader = scope.spawn(move || sent.send(cached.get().is_some()).unwrap());
+            let result = received.recv_timeout(Duration::from_secs(5));
+            // Release before joining even on a failure, so a regression fails
+            // with a timeout rather than hanging the test process forever.
+            drop(registry);
+            reader.join().unwrap();
+            assert_eq!(result, Ok(true), "a cached lookup waited for the registry");
+        });
     }
 }

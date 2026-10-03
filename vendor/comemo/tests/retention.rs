@@ -363,3 +363,41 @@ fn expensive_computation_counters_include_over_budget_misses_only() {
     assert_eq!(cleared.expensive_compute_count, after.expensive_compute_count);
     assert_eq!(cleared.expensive_compute_time, after.expensive_compute_time);
 }
+
+#[test]
+#[serial]
+fn unconfigured_functions_observe_late_output_policy_registration() {
+    #[derive(Clone, Debug, PartialEq)]
+    struct Output(u8);
+    #[memoize]
+    fn first(id: u8) -> Output {
+        Output(id)
+    }
+    #[memoize]
+    fn second(id: u8) -> Output {
+        Output(id + 10)
+    }
+    evict(0);
+    for id in 0..4 {
+        assert_eq!(first(id), Output(id));
+        assert!(!comemo::testing::last_was_hit());
+        assert_eq!(second(id), Output(id + 10));
+        assert!(!comemo::testing::last_was_hit());
+    }
+    assert_eq!(comemo::retention_stats().entries, 0);
+    assert!(comemo::retain_expensive::<Output>(policy(4, 4), |_| Some(1)));
+    assert_eq!(first(4), Output(4));
+    assert_eq!(second(4), Output(14));
+    assert_eq!(comemo::retention_stats().entries, 2);
+    evict(1);
+    evict(1);
+    assert_eq!(first(4), Output(4));
+    assert!(comemo::testing::last_was_hit());
+    assert_eq!(second(4), Output(14));
+    assert!(comemo::testing::last_was_hit());
+    // Registering a policy does not retroactively promote existing outputs.
+    assert_eq!(first(0), Output(0));
+    assert!(!comemo::testing::last_was_hit());
+    evict(0);
+    assert_eq!(comemo::retention_stats().entries, 0);
+}

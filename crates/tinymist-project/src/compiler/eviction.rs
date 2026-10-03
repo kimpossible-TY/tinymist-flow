@@ -54,12 +54,20 @@ fn retention_payload_budget(pressure: MemoryPressure) -> usize {
     }
 }
 
+fn maintenance_work_class(pressure: MemoryPressure) -> WorkClass {
+    match pressure {
+        // Reclaiming memory becomes interactive work when the system is under
+        // pressure. The scoped guard still restores the worker after each sweep.
+        MemoryPressure::Warning | MemoryPressure::Critical => WorkClass::Interactive,
+        MemoryPressure::Normal | MemoryPressure::Unknown => WorkClass::Maintenance,
+    }
+}
+
 /// Request a sweep without spawning one worker per completed compilation.
 pub(super) fn schedule() {
     if EVICTION.request() {
         let queued_at = Instant::now();
         super::spawn_cpu(move || {
-            let _qos = QosGuard::enter(WorkClass::Maintenance);
             log::debug!(
                 "ProjectCompiler: automatic cache sweep queued for {:?}",
                 queued_at.elapsed()
@@ -67,6 +75,8 @@ pub(super) fn schedule() {
             EVICTION.run(|| {
                 let start = Instant::now();
                 let pressure = MemorySnapshot::capture().pressure;
+                let work_class = maintenance_work_class(pressure);
+                let _qos = QosGuard::enter(work_class);
                 let payload_budget = retention_payload_budget(pressure);
                 comemo::set_retention_limits::<StrResult<Bytes>>(
                     PROTECTED_ENTRIES,
@@ -75,7 +85,7 @@ pub(super) fn schedule() {
                 comemo::evict(MAX_UNUSED_AGE);
                 let retained = comemo::retention_stats();
                 log::debug!(
-                    "ProjectCompiler: evict comemo cache in {:?} (max_age={MAX_UNUSED_AGE}, protected_entries={}, protected_payload_bytes={}, protected_hits={}, expensive_compute_count={}, expensive_compute_time={:?}, payload_budget={payload_budget}, memory_pressure={pressure:?})",
+                    "ProjectCompiler: evict comemo cache in {:?} (max_age={MAX_UNUSED_AGE}, protected_entries={}, protected_payload_bytes={}, protected_hits={}, expensive_compute_count={}, expensive_compute_time={:?}, payload_budget={payload_budget}, memory_pressure={pressure:?}, work_class={work_class:?})",
                     start.elapsed(), retained.entries, retained.payload_bytes, retained.hits,
                     retained.expensive_compute_count, retained.expensive_compute_time,
                 );
@@ -135,6 +145,16 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn maintenance_priority_follows_memory_pressure() {
+        for pressure in [MemoryPressure::Normal, MemoryPressure::Unknown] {
+            assert_eq!(maintenance_work_class(pressure), WorkClass::Maintenance);
+        }
+        for pressure in [MemoryPressure::Warning, MemoryPressure::Critical] {
+            assert_eq!(maintenance_work_class(pressure), WorkClass::Interactive);
+        }
+    }
 
     #[test]
     fn pressure_reduces_only_the_extended_payload_budget() {

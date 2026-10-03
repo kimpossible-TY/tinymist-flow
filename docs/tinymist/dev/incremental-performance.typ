@@ -53,6 +53,12 @@ When pressure information is unavailable, the normal budget applies. Manual
 `comemo::evict(0)` clears protected entries too. These limits describe logical
 output payloads, not total allocations, ordinary caches, or process RSS.
 
+Protection reservations live in a side table only for function caches that have
+protected outputs. Ordinary cache entries carry no retention field. Each function
+cache remembers its positive or negative output-policy lookup; a registration
+generation invalidates that lookup when another type is registered. Normal misses
+therefore avoid repeatedly locking and hashing in the global policy registry.
+
 Maintenance logs include cumulative `expensive_compute_count` and
 `expensive_compute_time` for eligible costly byte computations, including those
 that could not reserve space in the budget. `protected_hits` counts reuse of
@@ -63,12 +69,17 @@ overlap, so summed computation times do not measure elapsed time or time saved.
 Expired outputs and tracked calls are detached while holding their cache lock
 and destroyed after releasing it. Eviction callbacks also run without holding
 the global registration lock. Insertion-conflict destruction is unchanged.
+Temporary detachment vectors scale with the values and tracked calls removed by
+one function-cache sweep; their memory is outside the protected-output budget.
 
 == Native macOS execution
 
 Rayon workers receive a user-initiated QoS baseline. Compilation and semantic
-analysis use scoped user-initiated QoS; cache maintenance uses utility QoS and
-restores the worker's previous class when it finishes. macOS chooses the actual
+analysis use scoped user-initiated QoS. Cache maintenance uses utility QoS under
+normal or unknown memory pressure, and user-initiated QoS under warning or
+critical pressure so reclamation remains responsive. The pressure is checked
+for each sweep, and the worker's previous class is restored afterward. macOS
+chooses the actual
 cores. The application does not pin threads to performance cores or infer core
 assignment from QoS. Critical memory pressure limits simultaneous project
 compilations while allowing at least one pending task to make progress.
@@ -119,6 +130,21 @@ missing font. Its compiler warning identifies the newest compiled source.
 diagnostic conversion and publication. Word-count status repeats and older
 compilation notifications cannot satisfy this endpoint. The probe is never
 written to the book snapshot or the user's sources.
+
+The Maquette retention replay lets two completed cache sweeps age the figure's
+inner results while only the chapter changes. It then replaces `nx = 64` with
+the equal integer expression `nx = 32 * 2`, forcing figure reevaluation with
+unchanged mesh and render arguments. A hidden, placed font probe in that same
+figure confirms delivery of its new revision. The required evidence is at least
+four protected hits and no new eligible costly computations at the trigger.
+This checks cache reuse; complete PDF equality is verified separately.
+
+```sh
+python3 tests/perf/incremental-performance/cache_replay.py \
+  --baseline /path/to/baseline --candidate /path/to/candidate \
+  --book /path/to/book-snapshot --output /path/to/results/cache-replay \
+  --require-retention
+```
 
 After the warm marker arrives, the harness requires three seconds of successful
 compilation without new compile activity or diagnostic publications. This lets
@@ -193,12 +219,34 @@ INSTA_UPDATE=no cargo test --locked -p tests
 
 == Validation results
 
-Native library tests passed: 95 language-server, 11 preview and 29 project
+Native library tests passed: 95 language-server, 11 preview and 30 project
 tests, with eight pre-existing ignored cases. Three macOS scheduling/memory
-tests and 31 comemo unit, integration and documentation tests also passed.
+tests and 34 comemo unit, integration and documentation tests also passed.
 Strict Clippy passed for affected native crates and the minimal, preview and
 web feature combinations on the ARM Mac host. These feature checks are not a
 cross-compilation to WebAssembly. Formatting and Python syntax checks passed.
 
-Runtime comparison and packaged-app validation follow the optimized candidate
-build. The original 183-second event has not been retrospectively decomposed.
+The intermediate 0.1.4 candidate at `7bfc336f` passed nine CLI/end-to-end tests,
+nine app tests and both preview smoke suites. The preview demand comparison
+reduced compilations from two to zero without viewers and from two to one with
+one active palette. Two active palettes still received two updated documents.
+Cold first frames, saved positions, offline edits and reconnects passed.
+
+The 308-page book's expanded PDF bytes matched after masking only Info/XMP
+timestamps, XMP document/instance IDs and the final trailer IDs. All 418 semantic
+Note IDs were preserved. Rendered pages 1 and 269 were byte-identical and were
+visually checked. Source snapshots were unchanged.
+
+That intermediate candidate was withheld from installation after repeated-edit
+measurements found a regression. With six samples per mode, baseline-first
+compile edit-result medians were 11.37 and 15.01 seconds; mixed medians were
+39.26 and 36.93 seconds. Reversing the compile-only execution order gave
+11.53 and 13.56 seconds for baseline and candidate. All 18 latest mixed-query
+responses agreed, but these timings did not demonstrate an overall speedup.
+The follow-up reduces general cache bookkeeping overhead and makes maintenance
+priority respond to memory pressure. Final results are recorded after validation.
+
+The original 183-second event has not been retrospectively decomposed. Compile
+worker queue timing starts at dispatch; it excludes the time a newer revision
+remains pending behind an already-running compilation. Stage timings are wall
+durations and cannot be summed across overlapping background work as CPU time.
