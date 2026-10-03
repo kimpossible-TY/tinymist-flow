@@ -36,3 +36,18 @@
 - New PDE engine PID 79096 is waiting before HTTP bind. At **22:08:29 KST**, TCC logged an existing-code-requirement mismatch and `AUTHREQ_PROMPTING` for `kTCCServiceSystemPolicyDocumentsFolder` attributed to `io.github.kimpossible-ty.tinymist-flow`.
 - At verification time the loopback listener and new PDE change record do not yet exist, and `https://kimtaeyoungs-macbook-air-daemon.tail8adc61.ts.net:23625/` returns **502**. Running process status is not readiness confirmation.
 - Leave the correct updated bundle installed, without a rollback/reinstallation cycle. Task 11.4 remains pending renewed user Documents consent and actual PDE URL/document delivery verification. No confirmed release tag, main merge, or push was performed.
+
+## Computer Use follow-up — 2026-10-03
+
+- The user explicitly requested direct permission approval and service start. System Settings showed tinymist-flow's Documents Folder switch on, but TCC still logged a code-requirement mismatch and `AUTHREQ_PROMPTING`. The old PID 79096 served HTTP 200 without a rendered document or change record; this was not successful recovery.
+- Stopped the old PDE job, confirmed its exit, and started the existing installed app again as PID 79550. A process sample shows startup waiting while opening the configured fonts directory. The HTTPS endpoint currently returns 502.
+- Attempting to refresh Documents access in System Settings opened an administrator Password/Unlock sheet. No password was entered and the permission change has not completed. The Computer Use tool also explicitly disallowed access to the UserNotificationCenter app, so its pending notification could not be operated directly.
+- The System Settings authentication sheet remains open for the user's local authentication. Continue with the Documents switch and PDE delivery verification after it is unlocked; do not rebuild or replace the app.
+
+## Permission applied and PDE verified — 2026-10-03
+
+- After the user completed administrator authentication, System Settings showed the Documents Folder switch off. Enabled it for tinymist-flow and selected Quit & Reopen in the macOS prompt. The resulting settings view confirms Documents Folder on.
+- The already-started PDE engine PID 79550 resumed. The existing HTTPS URL returns HTTP 200. The installed 0.1.3 app and engine were not rebuilt or replaced.
+- The managed `changes/typst-pde.json` record now exists with mode 0600. Both light and dark variants have 307 successful page fingerprints. Their positions are null because this first successful compilation establishes the baseline; the next visual edit will supply the saved location.
+- A fresh Chrome tab on the production URL rendered the actual PDE cover, including its title, author, equation, and document links. This confirms document delivery beyond HTTP availability. The temporary verification tab is left to normal turn cleanup.
+- Task 11.4 is complete. The physical iPhone selection-handle check in task 10.6 remains pending; no claim is made that desktop verification completes that check. No release tag, main merge, or push was performed.
