@@ -11,6 +11,7 @@ output equivalence. Run only after builds have stopped, one engine at a time.
 import argparse
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -31,10 +32,10 @@ def sweeps(path):
     records = []
     if not path.exists():
         return records
-    for line in path.read_text(errors="replace").splitlines():
+    for index, line in enumerate(path.read_text(errors="replace").splitlines()):
         if "evict comemo cache in " not in line:
             continue
-        record = {"line": line}
+        record = {"line": line, "log_line_index": index}
         for key in ("protected_entries", "protected_payload_bytes", "protected_hits",
                     "expensive_compute_count", "payload_budget"):
             match = re.search(rf"\b{key}=(\d+)", line)
@@ -47,16 +48,86 @@ def sweeps(path):
     return records
 
 
-def wait_sweep(session, checkpoint, timeout):
+def phase_events(lines, entry):
+    """Preserve log order; wall-clock timestamps only have second precision."""
+    events = []
+    for index, line in enumerate(lines):
+        if "compilation succeeded" in line:
+            kind = "compiled" if f"{entry}:" in line else "ambiguous"
+        elif "automatic cache sweep queued for " in line:
+            # This is emitted when a new sweep worker starts, before its sweep.
+            kind = "started"
+        elif "evict comemo cache in " in line:
+            kind = "swept"
+        elif "outcome=discarded" in line or "compilation failed" in line:
+            kind = "ambiguous"
+        else:
+            continue
+        events.append((index, kind))
+    return events
+
+
+def validate_phase_events(events, *, warm=False):
+    """Require a fresh sweep whose counter read follows the completed compile.
+
+    A previously running/coalesced sweep is deliberately insufficient. Without
+    revision IDs on sweeps, concurrent or extra work cannot be disambiguated.
+    Warm-up may have earlier complete activity, but its final chain must match.
+    """
+    compiled = [i for i, (_, kind) in enumerate(events) if kind == "compiled"]
+    if not compiled:
+        return None
+    if not warm and len(compiled) != 1:
+        raise ValueError("expected exactly one successful main compile in the measured phase")
+    chain = events[compiled[-1]:] if warm else events
+    kinds = [kind for _, kind in chain]
+    if kinds in (["compiled"], ["compiled", "started"]):
+        return None  # The fresh worker can take longer than the quiet window.
+    if kinds != ["compiled", "started", "swept"]:
+        raise ValueError(f"ambiguous compile/sweep phase: {chain}")
+    return chain[-1][0]
+
+
+def settle_sweep(session, entry, log_checkpoint, timeout, quiet_seconds, *, warm=False):
+    """Select a post-compilation counter snapshot, then require observed quiet.
+
+    The quiet window is additional protection against dependency-watch work;
+    the ordered fresh-worker chain provides the counter sampling boundary.
+    This remains an observed protocol/log boundary, not an engine idle API.
+    """
     deadline = time.monotonic() + timeout
     log = session.output / "server.log"
+    quiet_since = time.monotonic()
+    previous = None
     while True:
-        records = sweeps(log)
-        if len(records) > checkpoint:
-            return records
-        if time.monotonic() >= deadline:
-            raise TimeoutError("no completed automatic comemo sweep after acknowledged edit")
         session.pump(0.1)
+        now = time.monotonic()
+        lines = log.read_text(errors="replace").splitlines()
+        events = phase_events(lines[log_checkpoint:], entry)
+        signature = (events, session.compile_activity_at)
+        if signature != previous:
+            previous = signature
+            quiet_since = now
+        quiet = (session.compile_status == "compileSuccess"
+                 and session.client.messages.empty()
+                 and now - quiet_since >= quiet_seconds)
+        if quiet and events:
+            # Fail closed once an ambiguous phase has settled; do not pick a
+            # convenient earlier counter record or silently ignore extra work.
+            selected = validate_phase_events(events, warm=warm)
+            if selected is not None:
+                selected += log_checkpoint
+                records = sweeps(log)
+                if not records or records[-1]["log_line_index"] != selected:
+                    # The log changed between reads. Observe the new complete state.
+                    previous = None
+                else:
+                    session.event("cache_phase_settled", warm=warm, quiet_seconds=quiet_seconds,
+                                  log_checkpoint=log_checkpoint, selected_log_line=selected,
+                                  completed_sweeps=len(records))
+                    return records
+        if now >= deadline:
+            raise TimeoutError("no unambiguous completed compile/sweep chain with quiet counters")
 
 
 def figures_fixture(path):
@@ -90,12 +161,15 @@ def run(binary, args, name):
     result = {
         "mode": "cache-retention", "engine": name, "binary": str(binary),
         "binary_sha256": replay.sha256(binary), "config": config,
+        "settle_quiet_seconds": args.settle_quiet_seconds, "timeout_seconds": args.timeout,
         "events": [], "responses": {}, "unexpected_responses": [], "diagnostics": {},
         "memory": [], "stages": [], "notes": [
             "Only LSP memory overlays are modified; no book/package file is edited.",
             "The figures function contains a hidden placed 0.1pt missing-font probe; warning delivery proves its latest revision reached layout.",
             "Probe content never enters Maquette arguments; nx=32*2 is the same integer 64 as nx=64.",
+            "Each phase requires a successful main compile followed in log order by a fresh sweep worker and completed sweep, then observed LSP/log quiet.",
             "At least two completed automatic eviction sweeps are observed during unrelated chapter probe edits.",
+            "Protected hits count lookup events, not distinct outputs; costly computation counts exclude calls below the configured threshold.",
             "Counts cover eligible costly byte computations, not all cache misses or identified plugin functions.",
             "No PDF/bitmap comparison is performed; exact complete-document output equality is not established by this harness.",
         ],
@@ -130,6 +204,8 @@ def run(binary, args, name):
             "workspaceFolders": [{"uri": args.book.as_uri(), "name": "book"}],
         }, "initialize", args.timeout)
         result["server_info"] = initialized.get("serverInfo")
+        log = output / "server.log"
+        checkpoint = len(log.read_text(errors="replace").splitlines())
         session.client.notify("initialized", {})
         sent = time.monotonic()
         for path, text in (
@@ -145,14 +221,16 @@ def run(binary, args, name):
         }, "pin", args.timeout)
         session.settle(figures.as_uri(), "flow-replay-confirm-figure-warm", sent, args.timeout)
         session.settle(chapter.as_uri(), "flow-replay-confirm-chapter-warm", sent, args.timeout)
-        records = wait_sweep(session, 0, args.timeout)
+        session.stabilize_warm(args.settle_quiet_seconds, args.timeout)
+        records = settle_sweep(session, entry, checkpoint, args.timeout,
+                               args.settle_quiet_seconds, warm=True)
         result["warm_sweeps"] = records
         session.event("warm_complete", completed_sweeps=len(records))
 
         # Figure source stays byte-identical during these edits: its outer
         # memoized work can hide the inner plugin result from direct cache hits.
         for round_number in range(1, args.age_rounds + 1):
-            checkpoint = len(sweeps(output / "server.log"))
+            checkpoint = len(log.read_text(errors="replace").splitlines())
             marker = f"flow-replay-confirm-age-{round_number}"
             body = chapter_text.replace(replay.PROBE_SLOT, marker)
             sent = time.monotonic()
@@ -161,15 +239,16 @@ def run(binary, args, name):
                 "contentChanges": [{"text": body}],
             })
             received = session.settle(chapter.as_uri(), marker, sent, args.timeout)
-            records = wait_sweep(session, checkpoint, args.timeout)
+            records = settle_sweep(session, entry, checkpoint, args.timeout,
+                                   args.settle_quiet_seconds)
             stage = {"stage": f"age-{round_number}", "edit_result_seconds": received - sent,
                      "source_sha256": replay.hashlib.sha256(body.encode()).hexdigest(),
                      "completed_sweeps": len(records), "last_sweep": records[-1]}
             result["stages"].append(stage)
             session.event("age_complete", **stage)
 
-        result["before_trigger_sweeps"] = sweeps(output / "server.log")
-        checkpoint = len(result["before_trigger_sweeps"])
+        result["before_trigger_sweeps"] = records
+        checkpoint = len(log.read_text(errors="replace").splitlines())
         marker = "flow-replay-confirm-figure-trigger"
         body = figures_changed.replace(FIGURES_SLOT, marker)
         sent = time.monotonic()
@@ -178,7 +257,8 @@ def run(binary, args, name):
             "contentChanges": [{"text": body}],
         })
         received = session.settle(figures.as_uri(), marker, sent, args.timeout)
-        records = wait_sweep(session, checkpoint, args.timeout)
+        records = settle_sweep(session, entry, checkpoint, args.timeout,
+                               args.settle_quiet_seconds)
         result["trigger"] = {"edit_result_seconds": received - sent,
                              "source_sha256": replay.hashlib.sha256(body.encode()).hexdigest(),
                              "last_sweep": records[-1]}
@@ -211,12 +291,16 @@ def main():
     parser.add_argument("--package-cache", type=Path, default=Path.home() / "Library/Caches/typst/packages")
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--age-rounds", type=int, default=2)
+    parser.add_argument("--settle-quiet-seconds", type=float, default=3,
+                        help="successful LSP/log quiet required after every compile/sweep phase")
     parser.add_argument("--max-footprint-gib", type=float, default=4.5)
     parser.add_argument("--require-retention", action="store_true",
                         help="fail unless protected outputs survive aging and are reused without costly recomputation")
     args = parser.parse_args()
-    if args.age_rounds < 2 or not 0 < args.max_footprint_gib <= 5:
-        parser.error("require at least two aging rounds and a footprint guard at most 5 GiB")
+    if (args.age_rounds < 2 or not 0 < args.max_footprint_gib <= 5
+            or not math.isfinite(args.timeout) or not math.isfinite(args.settle_quiet_seconds)
+            or not 0.5 <= args.settle_quiet_seconds < args.timeout):
+        parser.error("require at least two aging rounds, finite timeout > quiet >= 0.5 s, and a footprint guard at most 5 GiB")
     if replay.LIBPROC is None:
         parser.error("requires macOS process-footprint monitoring")
     for name in ("baseline", "candidate", "book", "output", "package_cache"):
@@ -239,24 +323,30 @@ def main():
                   "baseline_trigger_seconds": baseline.get("trigger", {}).get("edit_result_seconds"),
                   "candidate_trigger_seconds": candidate.get("trigger", {}).get("edit_result_seconds"),
                   "candidate_cache_evidence": None,
+                  "settle_quiet_seconds": args.settle_quiet_seconds,
                   "output_equivalence": "not measured; mesh/config preserved by integer identity; full document output comparison remains separate"}
     if candidate.get("completed"):
         warm = candidate["warm_sweeps"][-1]
         aged = candidate["before_trigger_sweeps"][-1]
         triggered = candidate["trigger"]["last_sweep"]
-        required = ("protected_hits", "expensive_compute_count")
+        required = ("protected_hits", "expensive_compute_count", "protected_entries", "protected_payload_bytes")
         if all(key in record for record in (warm, aged, triggered) for key in required):
             evidence = {
                 "aging_protected_hits": aged["protected_hits"] - warm["protected_hits"],
                 "aging_expensive_computations": aged["expensive_compute_count"] - warm["expensive_compute_count"],
                 "trigger_protected_hits": triggered["protected_hits"] - aged["protected_hits"],
                 "trigger_expensive_computations": triggered["expensive_compute_count"] - aged["expensive_compute_count"],
+                "protected_working_set_stable": (
+                    warm["protected_entries"] == aged["protected_entries"] == triggered["protected_entries"] >= 4
+                    and warm["protected_payload_bytes"] == aged["protected_payload_bytes"] == triggered["protected_payload_bytes"] > 0),
+                "interpretation": "Aggregate protected lookup events, not distinct Maquette outputs; zero costly eligible computations does not exclude cheaper calls.",
             }
             evidence["supports_hidden_result_retention"] = (
                 evidence["aging_protected_hits"] == 0
                 and evidence["aging_expensive_computations"] == 0
                 and evidence["trigger_protected_hits"] >= 4
-                and evidence["trigger_expensive_computations"] == 0)
+                and evidence["trigger_expensive_computations"] == 0
+                and evidence["protected_working_set_stable"])
             comparison["candidate_cache_evidence"] = evidence
     (args.output / "comparison.json").write_text(json.dumps(comparison, indent=2))
     print(json.dumps(comparison, indent=2))

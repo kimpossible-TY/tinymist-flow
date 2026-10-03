@@ -135,9 +135,17 @@ The Maquette retention replay lets two completed cache sweeps age the figure's
 inner results while only the chapter changes. It then replaces `nx = 64` with
 the equal integer expression `nx = 32 * 2`, forcing figure reevaluation with
 unchanged mesh and render arguments. A hidden, placed font probe in that same
-figure confirms delivery of its new revision. The required evidence is at least
-four protected hits and no new eligible costly computations at the trigger.
-This checks cache reuse; complete PDF equality is verified separately.
+figure confirms delivery of its new revision. Each measured phase must log one
+successful main compilation, a subsequent fresh sweep worker, and its completed
+sweep in that order. Extra or overlapping work fails the phase instead of using
+an ambiguous counter snapshot. Successful LSP status and unchanged relevant logs
+must then remain quiet for three seconds (`--settle-quiet-seconds`); warm-up also
+uses the protocol quiet check. This is an observed boundary, not an engine idle
+API. The required evidence is at least four protected lookup events, no new
+eligible costly computations at the trigger, and unchanged protected entry and
+payload counts across aging and triggering. Hit events do not identify distinct
+outputs, and calls below the cost threshold are not counted as costly. This
+checks cache reuse; complete PDF equality is verified separately.
 
 ```sh
 python3 tests/perf/incremental-performance/cache_replay.py \
@@ -146,7 +154,8 @@ python3 tests/perf/incremental-performance/cache_replay.py \
   --require-retention
 ```
 
-After the warm marker arrives, the harness requires three seconds of successful
+For the book edit/query replay, after the warm marker arrives, the harness
+requires three seconds of successful
 compilation without new compile activity or diagnostic publications. This lets
 initial dependency-watch enrollment settle before measured edits. The duration
 is configurable with `--warm-quiet-seconds` and recorded in the results; it is
