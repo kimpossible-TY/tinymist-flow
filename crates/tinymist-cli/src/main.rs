@@ -188,6 +188,25 @@ fn main() -> Result<()> {
         output: None,
     });
 
+    // Parallel layout work may be stolen by any Rayon worker. Establish a
+    // consistent interactive baseline; scoped maintenance restores it on exit.
+    #[cfg(target_os = "macos")]
+    if let Err(err) = rayon::ThreadPoolBuilder::new()
+        .start_handler(|_| {
+            tinymist_std::performance::initialize_worker(
+                tinymist_std::performance::WorkClass::Interactive,
+            );
+        })
+        .build_global()
+    {
+        log::debug!("CPU pool already initialized; using existing workers: {err}");
+    }
+    log::debug!(
+        "CPU runtime: workers={} memory={:?}",
+        rayon::current_num_threads(),
+        tinymist_std::performance::MemorySnapshot::capture(),
+    );
+
     match cmd {
         Commands::Probe => Ok(()),
 

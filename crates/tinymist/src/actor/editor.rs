@@ -8,7 +8,7 @@ use lsp_types::{Diagnostic, Url};
 use reflexo::path::unix_slash;
 use reflexo_typst::typst::prelude::{eco_vec, EcoVec};
 use serde::{Deserialize, Serialize};
-use tinymist_project::CompileReport;
+use tinymist_project::{CompileReport, CompileTicket};
 use tinymist_query::DiagnosticsMap;
 use tokio::sync::mpsc;
 use typst_shim::syntax::VirtualPathExt;
@@ -102,6 +102,13 @@ impl EditorActor {
                 self.config = config;
             }
             EditorRequest::Diag(version, diagnostics) => {
+                if version
+                    .ticket
+                    .as_ref()
+                    .is_some_and(|ticket| !ticket.is_current())
+                {
+                    return;
+                }
                 log::debug!(
                     "received diagnostics from {version:?}: diag({:?})",
                     diagnostics.as_ref().map(|files| files.len())
@@ -206,6 +213,8 @@ pub struct ProjVersion {
     pub id: ProjectInsId,
     /// The revision of the project (compilation).
     pub revision: usize,
+    /// The originating task, checked again when queued diagnostics are consumed.
+    pub ticket: Option<CompileTicket>,
 }
 
 /// The compilation status of a project.
@@ -292,5 +301,61 @@ impl<'de> serde::Deserialize<'de> for ScatterVec<Diagnostic> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let vec = EcoVec::<Diagnostic>::deserialize(deserializer)?;
         Ok(ScatterVec(eco_vec![vec]))
+    }
+}
+
+#[cfg(all(test, feature = "system"))]
+mod scheduling_tests {
+    use super::*;
+    use clap::Parser;
+    use sync_ls::{Connection, LspClientRoot, LspMessage};
+    use tinymist_project::{
+        CompileOnceArgs, CompileServerOpts, Interrupt, ProjectCompiler, WorldProvider,
+    };
+
+    #[tokio::test]
+    async fn obsolete_queued_diagnostics_cannot_replace_current_editor_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("main.typ");
+        std::fs::write(&input, "#let value = 1").unwrap();
+        let args = CompileOnceArgs::parse_from([
+            "tinymist",
+            "--ignore-system-fonts",
+            input.to_str().unwrap(),
+        ]);
+        let (dep_tx, _dep_rx) = mpsc::unbounded_channel();
+        let mut compiler: ProjectCompiler<_, ()> = ProjectCompiler::new(
+            args.resolve().unwrap(),
+            dep_tx,
+            CompileServerOpts::default(),
+        );
+        compiler.process(Interrupt::Compile(ProjectInsId::PRIMARY));
+        let handler = compiler.handler.clone();
+        let (ticket, _queued_work) = compiler.primary.may_compile_latest(&handler).unwrap();
+        let stale = ProjVersion {
+            id: ProjectInsId::PRIMARY,
+            revision: ticket.revision,
+            ticket: Some(ticket),
+        };
+        compiler.process(Interrupt::Compile(ProjectInsId::PRIMARY));
+
+        let connection = Connection::<LspMessage>::channel();
+        let client = LspClientRoot::new(tokio::runtime::Handle::current(), connection.sender);
+        let (_editor_tx, editor_rx) = mpsc::unbounded_channel();
+        let mut editor = EditorActor::new(client.weak(), editor_rx, false);
+        let uri = Url::from_file_path(&input).unwrap();
+        let current = HashMap::from([(
+            uri.clone(),
+            eco_vec![Diagnostic::new_simple(
+                lsp_types::Range::default(),
+                "current diagnostic".into(),
+            )],
+        )]);
+        editor.publish(ProjectInsId::PRIMARY, Some(current));
+        editor.handle(EditorRequest::Diag(stale, None));
+        assert_eq!(
+            editor.diagnostics[&uri][&ProjectInsId::PRIMARY][0].message,
+            "current diagnostic",
+        );
     }
 }

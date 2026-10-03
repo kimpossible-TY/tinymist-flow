@@ -36,6 +36,7 @@ class Profiles(unittest.TestCase):
         self.assertEqual(plan['environment']['TINYMIST_ALLOWED_ORIGINS'], 'https://example.ts.net:24650')
         self.assertEqual(plan['agent']['ProgramArguments'][1:], ['--serve', 'test'])
         self.assertIn(package.APP_ID, plan['agent']['AssociatedBundleIdentifiers'])
+        self.assertEqual(plan['agent']['ProcessType'], 'Interactive')
         self.assertTrue(plan['environment']['TINYMIST_PREVIEW_FOCUS_FILE'].endswith('/data/focus/test.json'))
         self.assertTrue(plan['environment']['TINYMIST_PREVIEW_CHANGE_FILE'].endswith('/data/changes/test.json'))
     def test_duplicate_port_rejected(self):
@@ -80,5 +81,20 @@ class InstallRecovery(unittest.TestCase):
             previous = Path(json.loads((root / 'data/previous-release.json').read_text())['app'])
             self.assertEqual(package.executable(previous).read_text(), 'old')
             self.assertEqual(package.executable(old).read_text(), 'new')
+
+class NativeBuild(unittest.TestCase):
+    def test_native_build_uses_metadata_target_directory_and_locked_profile(self):
+        with patch.object(package.sys, 'platform', 'darwin'), \
+                patch.object(package.platform, 'machine', return_value='arm64'), \
+                patch.object(package, 'capture', return_value=json.dumps({'target_directory': '/tmp/custom target'})), \
+                patch.object(package, 'run') as run:
+            engine, metadata = package.build_native_engine(2)
+        self.assertEqual(engine, Path('/tmp/custom target/aarch64-apple-darwin/flow-release/tinymist'))
+        self.assertEqual(metadata['target'], 'aarch64-apple-darwin')
+        self.assertEqual(metadata['configuredLto'], 'thin')
+        command = run.call_args.args[0]
+        self.assertIn('--locked', command)
+        self.assertEqual(command[command.index('--profile') + 1], 'flow-release')
+        self.assertEqual(command[command.index('--jobs') + 1], '2')
 
 if __name__ == '__main__': unittest.main()

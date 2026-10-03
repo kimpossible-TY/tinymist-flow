@@ -48,7 +48,11 @@ impl QueryQueue {
             LspInterrupt::ChangeTask(id, _) => id == &ProjectInsId::PRIMARY,
             // Compilation produces a result from existing inputs. Settling
             // only removes dedicated projects; it cannot remove the primary.
-            LspInterrupt::Compile(_) | LspInterrupt::Compiled(_) | LspInterrupt::Settle(_) => false,
+            LspInterrupt::Compile(_)
+            | LspInterrupt::Compiled(_)
+            | LspInterrupt::CompileFinished(_)
+            | LspInterrupt::SetDemand(_, _)
+            | LspInterrupt::Settle(_) => false,
         };
         if changes_inputs {
             self.invalidate();
@@ -112,6 +116,9 @@ impl QueryQueue {
                         data: None,
                     });
                 }
+                let _qos = tinymist_std::performance::QosGuard::enter(
+                    tinymist_std::performance::WorkClass::Interactive,
+                );
                 work()
             })
             .await

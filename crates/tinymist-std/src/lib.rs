@@ -7,6 +7,7 @@ pub mod error;
 pub mod fs;
 pub mod hash;
 pub mod path;
+pub mod performance;
 pub mod time;
 
 pub(crate) mod concepts;

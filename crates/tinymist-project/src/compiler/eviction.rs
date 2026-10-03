@@ -1,7 +1,13 @@
 //! Automatic maintenance of the process-wide compiler caches.
 
+use std::sync::Once;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
 
+use typst::diag::StrResult;
+use typst::foundations::Bytes;
+
+use tinymist_std::performance::{MemoryPressure, MemorySnapshot, QosGuard, WorkClass};
 use tinymist_std::time::Instant;
 
 // Keep the working set touched since the preceding sweep. In comemo, a hit
@@ -12,21 +18,66 @@ pub(super) const MAX_UNUSED_AGE: usize = 1;
 
 static EVICTION: EvictionScheduler = EvictionScheduler::new();
 
+const PROTECTED_ENTRIES: usize = 64;
+const PROTECTED_PAYLOAD_BYTES: usize = 64 * 1024 * 1024;
+
+/// Keep costly byte results alive across outer memoization hits. The usual
+/// compiler graph still uses the short age above. No plugin instances or
+/// argument buffers are retained by this policy, and errors are excluded.
+/// The budget counts output payload bytes, not allocator usage or process RSS.
+pub(super) fn initialize_retention() {
+    static INITIALIZED: Once = Once::new();
+    INITIALIZED.call_once(|| {
+        comemo::retain_expensive::<StrResult<Bytes>>(
+            comemo::RetentionPolicy {
+                min_compute_time: Duration::from_millis(50),
+                max_age: 16,
+                max_entries: PROTECTED_ENTRIES,
+                max_payload_bytes: PROTECTED_PAYLOAD_BYTES,
+            },
+            result_payload_bytes,
+        );
+    });
+}
+
+/// Count successful byte payloads only. In particular, this cannot retain
+/// plugin modules, WASM stores, or plugin errors through the protected budget.
+fn result_payload_bytes(output: &StrResult<Bytes>) -> Option<usize> {
+    output.as_ref().ok().map(|bytes| bytes.len())
+}
+
+fn retention_payload_budget(pressure: MemoryPressure) -> usize {
+    match pressure {
+        MemoryPressure::Warning => 16 * 1024 * 1024,
+        MemoryPressure::Critical => 0,
+        MemoryPressure::Normal | MemoryPressure::Unknown => PROTECTED_PAYLOAD_BYTES,
+    }
+}
+
 /// Request a sweep without spawning one worker per completed compilation.
 pub(super) fn schedule() {
     if EVICTION.request() {
         let queued_at = Instant::now();
         super::spawn_cpu(move || {
+            let _qos = QosGuard::enter(WorkClass::Maintenance);
             log::debug!(
                 "ProjectCompiler: automatic cache sweep queued for {:?}",
                 queued_at.elapsed()
             );
             EVICTION.run(|| {
                 let start = Instant::now();
+                let pressure = MemorySnapshot::capture().pressure;
+                let payload_budget = retention_payload_budget(pressure);
+                comemo::set_retention_limits::<StrResult<Bytes>>(
+                    PROTECTED_ENTRIES,
+                    payload_budget,
+                );
                 comemo::evict(MAX_UNUSED_AGE);
+                let retained = comemo::retention_stats();
                 log::debug!(
-                    "ProjectCompiler: evict comemo cache in {:?} (max_age={MAX_UNUSED_AGE})",
-                    start.elapsed()
+                    "ProjectCompiler: evict comemo cache in {:?} (max_age={MAX_UNUSED_AGE}, protected_entries={}, protected_payload_bytes={}, protected_hits={}, expensive_compute_count={}, expensive_compute_time={:?}, payload_budget={payload_budget}, memory_pressure={pressure:?})",
+                    start.elapsed(), retained.entries, retained.payload_bytes, retained.hits,
+                    retained.expensive_compute_count, retained.expensive_compute_time,
                 );
             });
         });
@@ -84,6 +135,30 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn pressure_reduces_only_the_extended_payload_budget() {
+        assert_eq!(
+            retention_payload_budget(MemoryPressure::Normal),
+            64 * 1024 * 1024
+        );
+        assert_eq!(
+            retention_payload_budget(MemoryPressure::Warning),
+            16 * 1024 * 1024
+        );
+        assert_eq!(retention_payload_budget(MemoryPressure::Critical), 0);
+        assert_eq!(
+            retention_payload_budget(MemoryPressure::Unknown),
+            64 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn retention_counts_actual_byte_results_and_excludes_errors() {
+        let bytes = Bytes::new(vec![7; 1024 * 1024]);
+        assert_eq!(result_payload_bytes(&Ok(bytes)), Some(1024 * 1024));
+        assert_eq!(result_payload_bytes(&Err("plugin failed".into())), None);
+    }
 
     #[test]
     fn requests_before_worker_starts_share_one_sweep() {

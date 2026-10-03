@@ -12,7 +12,7 @@ rust-version = "1.92"
 
 [workspace]
 resolver = "2"
-members = ["benches/*", "crates/*", "tests"]
+members = ["benches/*", "crates/*", "tests", "vendor/comemo"]
 
 [workspace.dependencies]
 
@@ -278,6 +278,12 @@ debug = true
 inherits = "release"
 lto = "thin"
 
+# Explicit native build profile for the personal macOS application.
+[profile.flow-release]
+inherits = "release"
+lto = "thin"
+strip = "debuginfo"
+
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "warn"
 
@@ -312,6 +318,7 @@ ignore-hidden = false
 extend-exclude = ["/.git", "fixtures"]
 
 [patch.crates-io]
+comemo = { path = "vendor/comemo" }
 
 # This patch is used to bundle a locally built frontend (HTML) of `typst-preview`.
 # The shortcoming is that you cannot install tinymist from git source then, i.e. `cargo install --git ..`, with this patch.

@@ -107,6 +107,9 @@ impl ServerState {
         );
 
         let mut old_project = std::mem::replace(&mut self.project, new_project);
+        // Invalidate old queued work before the new project can publish. The
+        // shared CPU pool may be busy, so cancellation cannot wait for cleanup.
+        old_project.stop();
 
         // todo: the old dedicate projects should be transferred.
 
@@ -124,7 +127,7 @@ impl ServerState {
             .interrupt(Interrupt::Memory(MemoryEvent::Update(snapshot)));
 
         spawn_cpu(move || {
-            old_project.stop();
+            drop(old_project);
         });
 
         Ok(())
@@ -267,6 +270,8 @@ pub struct ProjectInsStateExt {
     pub emitted_reasons: CompileSignal,
     /// The compiling since the last compilation.
     pub compiling_since: Option<tinymist_std::time::Time>,
+    /// The active worker, including its project lifetime.
+    pub active_compile: Option<CompileTicket>,
     /// The last compilation.
     pub last_compilation: Option<LspCompiledArtifact>,
 }
@@ -280,8 +285,8 @@ impl ProjectInsStateExt {
         handler: &dyn CompileHandler<LspCompilerFeat, ProjectInsStateExt>,
         compilation: &LspCompiledArtifact,
     ) {
-        self.compiling_since = None;
-
+        // Accepted notifications can arrive after a new worker was scheduled.
+        // Only worker completion releases that worker's admission slot.
         let rev = compilation.world().revision().get();
         if self.notified_revision >= rev {
             return;
@@ -358,9 +363,47 @@ impl ProjectState {
 
     /// Handles an interrupt.
     pub fn do_interrupt(compiler: &mut LspProjectCompiler, intr: Interrupt<LspCompilerFeat>) {
+        let mut accepted = None;
+        if let Interrupt::CompileFinished(outcome) = &intr {
+            if let Some(proj) = compiler
+                .projects()
+                .find(|proj| proj.id == outcome.ticket.id)
+            {
+                if proj
+                    .ext
+                    .active_compile
+                    .as_ref()
+                    .is_some_and(|active| active.same_task(&outcome.ticket))
+                {
+                    proj.ext.active_compile = None;
+                    proj.ext.compiling_since = None;
+                    if proj.is_demanded() && outcome.is_publishable() {
+                        if let (Some(artifact), Some(report)) = (&outcome.artifact, &outcome.report)
+                        {
+                            proj.handler.status(outcome.ticket.revision, report.clone());
+                            proj.handler.notify_compile(artifact);
+                            accepted = Some(artifact.clone());
+                        }
+                    } else {
+                        if !outcome.ticket.is_current() {
+                            proj.reason.merge(proj.ext.emitted_reasons);
+                        }
+                        log::info!(
+                            "Project({:?}): acknowledged discarded revision {}",
+                            proj.id,
+                            outcome.ticket.revision
+                        );
+                    }
+                }
+            }
+        }
+        // Commit an accepted result before admitting follow-up work. Its public
+        // Compiled notification may return later through the channel; waiting
+        // for that echo would schedule against the previous dependency state.
+        let intr = accepted.map(Interrupt::Compiled).unwrap_or(intr);
         if let Interrupt::Compiled(compiled) = &intr {
             let proj = compiler.projects().find(|p| &p.id == compiled.id());
-            if let Some(proj) = proj {
+            if let Some(proj) = proj.filter(|proj| proj.accepts_artifact(compiled)) {
                 proj.ext
                     .compiled(&proj.verse.revision, proj.handler.as_ref(), compiled);
             } else {
@@ -381,7 +424,10 @@ impl ProjectState {
 
     /// Stops the project.
     pub(crate) fn stop(&mut self) {
-        // todo: stop all compilations
+        for proj in self.compiler.projects() {
+            proj.invalidate_compiles();
+            proj.set_demand(false);
+        }
     }
 
     /// Restarts a dedicate project.
@@ -509,7 +555,9 @@ impl ProjectClient for mpsc::UnboundedSender<LspInterrupt> {
 
     #[cfg(feature = "preview")]
     fn server_event(&self, _event: ServerEvent) {
-        log::warn!("ProjectClient: server_event is not implemented for mpsc::UnboundedSender<LspInterrupt>");
+        log::warn!(
+            "ProjectClient: server_event is not implemented for mpsc::UnboundedSender<LspInterrupt>"
+        );
     }
 
     #[cfg(feature = "export")]
@@ -533,6 +581,7 @@ impl CompileHandlerImpl {
         let dv = ProjVersion {
             id: art.id().clone(),
             revision: art.world().revision().get(),
+            ticket: art.ticket.clone(),
         };
         // todo: better way to remove diagnostics
         let valid = !art.world().entry_state().is_inactive();
@@ -566,6 +615,14 @@ impl CompileHandlerImpl {
             let editor_tx = self.editor_tx.clone();
             let analysis = self.analysis.clone();
             spawn_cpu(move || {
+                if snap
+                    .ticket
+                    .as_ref()
+                    .is_some_and(|ticket| !ticket.is_current())
+                {
+                    return;
+                }
+                let ticket = snap.ticket.clone();
                 let mut ctx = analysis.enter(snap.graph.clone());
 
                 // todo: check all errors in this file
@@ -573,6 +630,9 @@ impl CompileHandlerImpl {
                     return;
                 };
 
+                if ticket.as_ref().is_some_and(|ticket| !ticket.is_current()) {
+                    return;
+                }
                 log::trace!("notify diagnostics({dv:?}): {diagnostics:#?}");
 
                 editor_tx
@@ -585,10 +645,13 @@ impl CompileHandlerImpl {
 
 impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl {
     fn on_any_compile_reason(&self, c: &mut LspProjectCompiler) {
+        let memory = tinymist_std::performance::MemorySnapshot::capture();
+        let constrained = memory.pressure == tinymist_std::performance::MemoryPressure::Critical;
+        let mut has_active = c.projects().any(|proj| proj.ext.active_compile.is_some());
         let instances_mut = std::iter::once(&mut c.primary).chain(c.dedicates.iter_mut());
         for s in instances_mut {
             let reason = s.reason;
-            if !reason.any() {
+            if !s.is_demanded() || !reason.any() {
                 continue;
             }
 
@@ -607,10 +670,10 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
 
                     if since.as_secs() > 60 {
                         log::warn!(
-                        "Project({id:?}): compiling for more than 60 seconds, since: {since:?}, \
+                            "Project({id:?}): compiling for more than 60 seconds, since: {since:?}, \
                      pending reasons: {:?}",
-                        s.ext.pending_reasons
-                    );
+                            s.ext.pending_reasons
+                        );
                     }
                 }
 
@@ -631,7 +694,8 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
                         break 'vfs_is_clean false;
                     };
                     if compilation.world().entry_state() != s.verse.entry_state() {
-                        log::info!("Project: updated regardless of vfs for {id:?} due to entry state change, world: {:?} v.s. verse: {:?}",
+                        log::info!(
+                            "Project: updated regardless of vfs for {id:?} due to entry state change, world: {:?} v.s. verse: {:?}",
                             compilation.world().entry_state(),
                             s.verse.entry_state(),
                         );
@@ -662,17 +726,25 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
                 continue;
             }
 
+            // Always admit one task, including under critical pressure. A
+            // completion re-enters this loop and admits the newest pending work.
+            if constrained && has_active {
+                continue;
+            }
             s.ext.pending_reasons = CompileSignal::default();
             s.ext.emitted_reasons = reason;
-            let Some(compile_fn) = s.may_compile(&c.handler) else {
+            let Some((ticket, compile_fn)) = s.may_compile_latest(&c.handler) else {
                 continue;
             };
             let id = s.snapshot().world().main_id();
 
             s.ext.compiling_since = Some(tinymist_std::time::now());
+            s.ext.active_compile = Some(ticket);
+            has_active = true;
+            let client = self.client.clone();
             spawn_cpu(move || {
                 let _guard = GLOBAL_STATS.stat(id, "main_compile");
-                compile_fn();
+                client.interrupt(Interrupt::CompileFinished(compile_fn()));
             });
         }
     }
@@ -692,6 +764,7 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
             let dv = ProjVersion {
                 id: rep.id.clone(),
                 revision,
+                ticket: None,
             };
             self.push_diagnostics(dv, None);
         }
@@ -717,12 +790,14 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
     }
 
     fn notify_removed(&self, id: &ProjectInsId) {
+        self.status_revision.lock().remove(id);
         let n_revs = &mut self.notified_revision.lock();
         let last_rev = n_revs.remove(id).unwrap_or_default();
 
         let dv = ProjVersion {
             id: id.clone(),
             revision: last_rev.0,
+            ticket: None,
         };
 
         // todo: race condition with notify_compile?
@@ -731,8 +806,15 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
     }
 
     fn notify_compile(&self, art: &LspCompiledArtifact) {
-        // NOTE: we have to inform the main thread about the compilation. If such
-        // interrupt is not sent, the main thread will be stalled forever.
+        if art
+            .ticket
+            .as_ref()
+            .is_some_and(|ticket| !ticket.is_current())
+        {
+            return;
+        }
+        // Accepted results still emit the public notification used by watch
+        // consumers. Worker admission is acknowledged separately, even on skips.
         self.client.interrupt(LspInterrupt::Compiled(art.clone()));
 
         {
@@ -750,7 +832,7 @@ impl CompileHandler<LspCompilerFeat, ProjectInsStateExt> for CompileHandlerImpl 
                 // Otherwise,
                 // 1. if the revision is not the same, ignores the signal.
                 // 2. if a fresh signal is found, merges and emits it.
-            } else if *n_rev == rev && n_signal.exclude(art.snap.signal).any() {
+            } else if *n_rev == rev && art.snap.signal.exclude(*n_signal).any() {
                 n_signal.merge(art.snap.signal);
 
                 // Otherwise we have already notified the client for this
@@ -827,3 +909,6 @@ impl lsp_types::notification::Notification for DevEvent {
     const METHOD: &'static str = "tinymist/devEvent";
     type Params = Self;
 }
+
+#[cfg(all(test, feature = "system"))]
+mod scheduling_tests;

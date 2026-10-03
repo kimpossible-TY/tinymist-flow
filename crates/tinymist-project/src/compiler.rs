@@ -3,6 +3,7 @@
 use core::fmt;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use ecow::{EcoString, EcoVec, eco_vec};
@@ -24,6 +25,8 @@ use typst::diag::{At, FileError};
 use typst::syntax::Span;
 
 mod eviction;
+mod scheduling;
+pub use scheduling::{CompileOutcome, CompileTicket};
 
 /// A compiled artifact.
 pub struct CompiledArtifact<F: CompilerFeat> {
@@ -35,6 +38,8 @@ pub struct CompiledArtifact<F: CompilerFeat> {
     pub doc: Option<TypstDocument>,
     /// The depended files.
     pub deps: OnceLock<EcoVec<FileId>>,
+    /// The queued task that produced this artifact, if it is revision guarded.
+    pub ticket: Option<CompileTicket>,
 }
 
 impl<F: CompilerFeat> fmt::Display for CompiledArtifact<F> {
@@ -59,6 +64,7 @@ impl<F: CompilerFeat> Clone for CompiledArtifact<F> {
             doc: self.doc.clone(),
             diag: self.diag.clone(),
             deps: self.deps.clone(),
+            ticket: self.ticket.clone(),
         }
     }
 }
@@ -102,6 +108,7 @@ impl<F: CompilerFeat> CompiledArtifact<F> {
             graph,
             doc,
             deps: OnceLock::default(),
+            ticket: None,
         }
     }
 
@@ -115,6 +122,7 @@ impl<F: CompilerFeat> CompiledArtifact<F> {
             graph,
             doc: None,
             deps: OnceLock::default(),
+            ticket: None,
         }
     }
 
@@ -251,6 +259,10 @@ pub enum Interrupt<F: CompilerFeat> {
     Settle(ProjectInsId),
     /// Compiled from computing thread.
     Compiled(CompiledArtifact<F>),
+    /// A worker completed or discarded a revision-guarded compilation.
+    CompileFinished(CompileOutcome<F>),
+    /// Enables or pauses automatic compilation while retaining world updates.
+    SetDemand(ProjectInsId, bool),
     /// Change the watching entry.
     ChangeTask(ProjectInsId, TaskInputs),
     /// Font changes.
@@ -271,6 +283,10 @@ impl<F: CompilerFeat> fmt::Debug for Interrupt<F> {
             Interrupt::Compile(id) => write!(f, "Compile({id:?})"),
             Interrupt::Settle(id) => write!(f, "Settle({id:?})"),
             Interrupt::Compiled(artifact) => write!(f, "Compiled({:?})", artifact.id()),
+            Interrupt::CompileFinished(outcome) => {
+                write!(f, "CompileFinished({:?})", outcome.ticket)
+            }
+            Interrupt::SetDemand(id, active) => write!(f, "SetDemand({id:?}, {active})"),
             Interrupt::ChangeTask(id, change) => {
                 write!(f, "ChangeTask({id:?}, entry={:?})", change.entry.is_some())
             }
@@ -383,6 +399,7 @@ impl<F: CompilerFeat + Send + Sync + 'static, Ext: Default + 'static> ProjectCom
             syntax_only,
         }: CompileServerOpts<F, Ext>,
     ) -> Self {
+        eviction::initialize_retention();
         let primary = Self::create_project(
             ProjectInsId("primary".into()),
             verse,
@@ -436,6 +453,7 @@ impl<F: CompilerFeat + Send + Sync + 'static, Ext: Default + 'static> ProjectCom
         syntax_only: bool,
         handler: Arc<dyn CompileHandler<F, Ext>>,
     ) -> ProjectInsState<F, Ext> {
+        let compile_revision = verse.revision.get();
         ProjectInsState {
             id,
             ext: Default::default(),
@@ -449,6 +467,9 @@ impl<F: CompilerFeat + Send + Sync + 'static, Ext: Default + 'static> ProjectCom
             latest_success_doc: None,
             deps: Default::default(),
             committed_revision: 0,
+            compile_generation: Arc::new(AtomicUsize::new(1)),
+            compile_revision,
+            demanded: true,
         }
     }
 
@@ -518,10 +539,23 @@ impl<F: CompilerFeat + Send + Sync + 'static, Ext: Default + 'static> ProjectCom
         }
     }
 
+    // Shared cache ages advance once per update when multiple demanded themes
+    // compile. If the primary has no viewers, an active dedicated project owns
+    // maintenance so dark-only preview sessions still have bounded caches.
+    fn cache_owner(&self) -> Option<&ProjectInsId> {
+        std::iter::once(&self.primary)
+            .chain(self.dedicates.iter())
+            .find(|proj| proj.is_demanded() && !proj.verse.entry_state().is_inactive())
+            .map(|proj| &proj.id)
+    }
+
     /// Process an interrupt.
     pub fn process(&mut self, intr: Interrupt<F>) {
         // todo: evcit cache
         self.process_inner(intr);
+        for proj in self.projects() {
+            proj.sync_compile_revision();
+        }
         // Customized Project Compilation Handler
         self.handler.clone().on_any_compile_reason(self);
     }
@@ -537,11 +571,37 @@ impl<F: CompilerFeat + Send + Sync + 'static, Ext: Default + 'static> ProjectCom
 
                 proj.reason.merge(reason_by_entry_change());
             }
+            Interrupt::CompileFinished(outcome) => {
+                // Superseded running evaluations still allocate memoized data.
+                // Maintain the shared cache even during continuous edits; work
+                // discarded before execution must not advance cache ages.
+                if outcome.executed
+                    && self.cache_owner() == Some(&outcome.ticket.id)
+                    && std::iter::once(&self.primary)
+                        .chain(self.dedicates.iter())
+                        .any(|proj| {
+                            proj.id == outcome.ticket.id
+                                && outcome.ticket.belongs_to(&proj.compile_generation)
+                        })
+                {
+                    eviction::schedule();
+                }
+            }
+            Interrupt::SetDemand(id, demanded) => {
+                if let Some(proj) = self.projects().find(|proj| proj.id == id) {
+                    proj.set_demand(demanded);
+                }
+            }
             Interrupt::Compiled(artifact) => {
-                let proj =
-                    Self::find_project(&mut self.primary, &mut self.dedicates, artifact.id());
+                let maintains_shared_cache = self.cache_owner() == Some(artifact.id());
+                let Some(proj) = std::iter::once(&mut self.primary)
+                    .chain(self.dedicates.iter_mut())
+                    .find(|proj| &proj.id == artifact.id())
+                else {
+                    return;
+                };
 
-                let processed = proj.process_compile(artifact);
+                let processed = proj.process_compile(artifact, maintains_shared_cache);
 
                 if processed {
                     self.deps
@@ -725,6 +785,11 @@ impl<F: CompilerFeat + Send + Sync + 'static, Ext: Default + 'static> ProjectCom
                     );
 
                     if !self.ignore_first_sync || !is_sync {
+                        // A queued world may not have read this source yet, so
+                        // VFS dependency tracking can leave its revision intact.
+                        // The accepted input event still supersedes queued work.
+                        proj.invalidate_compiles();
+                        proj.cached_snapshot = None;
                         proj.reason.merge(reason_by_fs());
                     }
                 }
@@ -802,9 +867,69 @@ pub struct ProjectInsState<F: CompilerFeat, Ext> {
     pub latest_success_doc: Option<TypstDocument>,
 
     committed_revision: usize,
+    compile_generation: Arc<AtomicUsize>,
+    compile_revision: usize,
+    demanded: bool,
+}
+
+impl<F: CompilerFeat, Ext> Drop for ProjectInsState<F, Ext> {
+    fn drop(&mut self) {
+        self.compile_generation.store(0, Ordering::Release);
+    }
 }
 
 impl<F: CompilerFeat, Ext: 'static> ProjectInsState<F, Ext> {
+    /// Whether automatic compilation is currently requested by a consumer.
+    pub fn is_demanded(&self) -> bool {
+        self.demanded
+    }
+
+    /// Pauses or resumes automatic work without discarding the world or caches.
+    pub fn set_demand(&mut self, demanded: bool) {
+        if self.demanded == demanded {
+            return;
+        }
+        self.demanded = demanded;
+        // A paused in-flight task may have consumed its compile reason. A
+        // clean, already committed document remains usable on reconnection and
+        // for a save signal with no input changes. Paused input edits already
+        // invalidate its generation through sync_compile_revision.
+        if !demanded && self.committed_revision != self.verse.revision.get() {
+            self.invalidate_compiles();
+            self.reason.merge(reason_by_entry_change());
+        }
+    }
+
+    /// Prevents queued or completed work from publishing after shutdown.
+    pub fn invalidate_compiles(&mut self) {
+        self.compile_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn sync_compile_revision(&mut self) {
+        let revision = self.verse.revision.get();
+        if revision != self.compile_revision {
+            self.compile_revision = revision;
+            self.invalidate_compiles();
+        }
+    }
+
+    fn compile_ticket(&mut self) -> CompileTicket {
+        self.sync_compile_revision();
+        CompileTicket::new(
+            self.id.clone(),
+            self.verse.revision.get(),
+            self.compile_generation.clone(),
+        )
+    }
+
+    /// Returns whether an artifact belongs to the current project lifetime.
+    pub fn accepts_artifact(&self, artifact: &CompiledArtifact<F>) -> bool {
+        artifact
+            .ticket
+            .as_ref()
+            .is_none_or(|ticket| ticket.is_current() && ticket.belongs_to(&self.compile_generation))
+    }
+
     /// Gets a snapshot of the project.
     pub fn snapshot(&mut self) -> Arc<WorldComputeGraph<F>> {
         match self.cached_snapshot.as_ref() {
@@ -836,7 +961,7 @@ impl<F: CompilerFeat, Ext: 'static> ProjectInsState<F, Ext> {
         &mut self,
         compute: impl FnOnce(&Arc<WorldComputeGraph<F>>) + 'a,
     ) -> Option<impl FnOnce() -> Arc<WorldComputeGraph<F>> + 'a> {
-        if !self.reason.any() || self.verse.entry_state().is_inactive() {
+        if !self.demanded || !self.reason.any() || self.verse.entry_state().is_inactive() {
             return None;
         }
 
@@ -855,7 +980,7 @@ impl<F: CompilerFeat, Ext: 'static> ProjectInsState<F, Ext> {
         &mut self,
         handler: &Arc<dyn CompileHandler<F, Ext>>,
     ) -> Option<impl FnOnce() -> CompiledArtifact<F> + 'static> {
-        if !self.reason.any() || self.verse.entry_state().is_inactive() {
+        if !self.demanded || !self.reason.any() || self.verse.entry_state().is_inactive() {
             return None;
         }
 
@@ -870,30 +995,96 @@ impl<F: CompilerFeat, Ext: 'static> ProjectInsState<F, Ext> {
         ))
     }
 
-    /// Compile the document once.
+    /// Queues work that can be discarded before execution or publication.
+    #[must_use]
+    pub fn may_compile_latest(
+        &mut self,
+        handler: &Arc<dyn CompileHandler<F, Ext>>,
+    ) -> Option<(
+        CompileTicket,
+        impl FnOnce() -> CompileOutcome<F> + 'static + use<F, Ext>,
+    )> {
+        if !self.demanded || !self.reason.any() || self.verse.entry_state().is_inactive() {
+            return None;
+        }
+        let ticket = self.compile_ticket();
+        let snap = self.snapshot();
+        self.reason = Default::default();
+        Some((
+            ticket.clone(),
+            Self::prepare_compile(
+                handler.clone(),
+                snap,
+                self.export_target,
+                self.syntax_only,
+                Some(ticket),
+            ),
+        ))
+    }
+
+    /// Compile the document once, preserving the synchronous API.
     fn run_compile(
         h: Arc<dyn CompileHandler<F, Ext>>,
         graph: Arc<WorldComputeGraph<F>>,
         export_target: ExportTarget,
         syntax_only: bool,
     ) -> impl FnOnce() -> CompiledArtifact<F> {
-        let start = tinymist_std::time::Instant::now();
+        let work = Self::prepare_compile(h.clone(), graph, export_target, syntax_only, None);
+        move || {
+            let outcome = work();
+            let compiled = outcome.artifact.expect("unconditional compilation");
+            if !compiled
+                .diagnostics()
+                .any(|d| d.message == FILE_MISSING_ERROR_MSG)
+            {
+                h.status(compiled.world().revision().get(), outcome.report.unwrap());
+                h.notify_compile(&compiled);
+            }
+            compiled
+        }
+    }
 
-        // todo unwrap main id
+    fn prepare_compile(
+        h: Arc<dyn CompileHandler<F, Ext>>,
+        graph: Arc<WorldComputeGraph<F>>,
+        export_target: ExportTarget,
+        syntax_only: bool,
+        ticket: Option<CompileTicket>,
+    ) -> impl FnOnce() -> CompileOutcome<F> {
+        let queued_at = tinymist_std::time::Instant::now();
         let id = graph.world().main_id().unwrap();
         let revision = graph.world().revision().get();
-
-        h.status(revision, {
+        let project = graph.snap.id.clone();
+        let guarded = ticket.is_some();
+        let ticket = ticket.unwrap_or_else(|| {
+            CompileTicket::new(project.clone(), revision, Arc::new(AtomicUsize::new(1)))
+        });
+        h.status(
+            revision,
             CompileReport {
-                id: graph.snap.id.clone(),
+                id: project.clone(),
                 compiling_id: Some(id),
                 page_count: 0,
                 status: CompileStatusEnum::Compiling,
-            }
-        });
+            },
+        );
 
         move || {
-            let compiled = if syntax_only {
+            let started_at = tinymist_std::time::Instant::now();
+            let queued = queued_at.elapsed();
+            if !ticket.is_current() {
+                log::info!(
+                    "compile timing project={project:?} revision={revision} outcome=discarded-before-start queue={queued:?}"
+                );
+                return CompileOutcome::discarded(ticket, false);
+            }
+            let _qos = tinymist_std::performance::QosGuard::enter(
+                tinymist_std::performance::WorkClass::Interactive,
+            );
+            let memory_start = tinymist_std::performance::MemorySnapshot::capture();
+            // Typst has no safe mid-evaluation cancellation API. Check only at
+            // phase boundaries, and let an already running evaluation finish.
+            let (doc, syntax_diagnostics) = if syntax_only {
                 let main = graph.snap.world.main();
                 let source_res = graph.world().source(main).at(Span::detached());
                 let syntax_res = source_res.and_then(|source| {
@@ -904,57 +1095,82 @@ impl<F: CompilerFeat, Ext: 'static> ProjectInsState<F, Ext> {
                         Err(errors.into_iter().map(|s| s.into()).collect())
                     }
                 });
-                let diag = Arc::new(DiagnosticsTask::from_errors(syntax_res.err()));
-
-                CompiledArtifact {
-                    diag,
-                    graph,
-                    doc: None,
-                    deps: OnceLock::default(),
-                }
+                (None, Some(DiagnosticsTask::from_errors(syntax_res.err())))
             } else {
-                match export_target {
-                    ExportTarget::Bundle => CompiledArtifact::from_graph_without_doc(graph),
-                    ExportTarget::Html => CompiledArtifact::from_graph(graph, true),
-                    ExportTarget::Paged => CompiledArtifact::from_graph(graph, false),
-                }
+                let doc = match export_target {
+                    ExportTarget::Bundle => {
+                        let _ = graph
+                            .compute::<BundleCompilationTask>()
+                            .expect("bundle compilation");
+                        None
+                    }
+                    ExportTarget::Html => {
+                        graph.shared_compile_html().expect("html").map(From::from)
+                    }
+                    ExportTarget::Paged => graph.shared_compile().expect("paged").map(From::from),
+                };
+                (doc, None)
             };
-
+            let execution = started_at.elapsed();
+            if !ticket.is_current() {
+                log::info!(
+                    "compile timing project={project:?} revision={revision} outcome=discarded-after-execution queue={queued:?} execution={execution:?} total={:?}",
+                    queued_at.elapsed()
+                );
+                return CompileOutcome::discarded(ticket, true);
+            }
+            let diagnostics_at = tinymist_std::time::Instant::now();
+            let diag = syntax_diagnostics
+                .map(Arc::new)
+                .unwrap_or_else(|| graph.shared_diagnostics().expect("diag"));
+            let compiled = CompiledArtifact {
+                diag,
+                graph,
+                doc,
+                deps: OnceLock::default(),
+                ticket: guarded.then(|| ticket.clone()),
+            };
             let res = CompileStatusResult {
                 diag: (compiled.warning_cnt() + compiled.error_cnt()) as u32,
-                elapsed: start.elapsed(),
+                elapsed: queued_at.elapsed(),
             };
             let rep = CompileReport {
-                id: compiled.id().clone(),
+                id: project.clone(),
                 compiling_id: Some(id),
                 page_count: compiled.doc.as_ref().map_or(0, |doc| doc.num_of_pages()),
-                status: match &compiled.doc {
-                    Some(..) => CompileStatusEnum::CompileSuccess(res),
-                    None if res.diag == 0 => CompileStatusEnum::CompileSuccess(res),
-                    None => CompileStatusEnum::CompileError(res),
+                status: if compiled.doc.is_some() || res.diag == 0 {
+                    CompileStatusEnum::CompileSuccess(res)
+                } else {
+                    CompileStatusEnum::CompileError(res)
                 },
             };
-
-            // todo: we need to check revision for really concurrent compilation
+            let diagnostics = diagnostics_at.elapsed();
+            log::info!(
+                "compile timing project={project:?} revision={revision} outcome=finished queue={queued:?} execution={execution:?} diagnostics={diagnostics:?} total={:?}",
+                queued_at.elapsed()
+            );
+            let memory_end = tinymist_std::performance::MemorySnapshot::capture();
+            log::info!(
+                "compile memory project={project:?} revision={revision} before={memory_start:?} after={memory_end:?}"
+            );
             log_compile_report(&rep);
-
-            if compiled
-                .diagnostics()
-                .any(|d| d.message == FILE_MISSING_ERROR_MSG)
-            {
-                return compiled;
+            CompileOutcome {
+                ticket,
+                executed: true,
+                artifact: Some(compiled),
+                report: Some(rep),
             }
-
-            h.status(revision, rep);
-            h.notify_compile(&compiled);
-            compiled
         }
     }
 
-    fn process_compile(&mut self, artifact: CompiledArtifact<F>) -> bool {
+    fn process_compile(
+        &mut self,
+        artifact: CompiledArtifact<F>,
+        maintains_shared_cache: bool,
+    ) -> bool {
         let world = &artifact.snap.world;
         let compiled_revision = world.revision().get();
-        if self.committed_revision >= compiled_revision {
+        if !self.accepts_artifact(&artifact) || self.committed_revision >= compiled_revision {
             return false;
         }
 
@@ -978,18 +1194,19 @@ impl<F: CompilerFeat, Ext: 'static> ProjectInsState<F, Ext> {
 
         let mut world = world.clone();
 
-        let is_primary = self.id == ProjectInsId("primary".into());
-
-        // All projects share comemo's caches. Only the primary project requests
-        // automatic sweeps, which are coalesced independently of world cleanup.
-        if is_primary {
+        // All projects share comemo's caches. One demanded project requests
+        // automatic sweeps, coalesced independently of world cleanup.
+        if maintains_shared_cache {
             eviction::schedule();
         }
 
         let queued_at = tinymist_std::time::Instant::now();
         spawn_cpu(move || {
+            let _qos = tinymist_std::performance::QosGuard::enter(
+                tinymist_std::performance::WorkClass::Maintenance,
+            );
             let queued = queued_at.elapsed();
-            if is_primary {
+            if maintains_shared_cache {
                 let start = tinymist_std::time::Instant::now();
                 world.evict_source_cache(30);
                 log::debug!(
@@ -1077,6 +1294,192 @@ mod tests {
     const DEP: &str = "dep.typ";
     const RENAMED_DEP: &str = "renamed.typ";
     const UNRELATED: &str = "notes.typ";
+
+    #[test]
+    fn clean_demand_cycle_preserves_committed_ticket_for_save_replay() {
+        let mut harness = ProjectCompilerHarness::new(&[(MAIN, "#let value = 1")]);
+        harness
+            .compiler
+            .process(Interrupt::Compile(ProjectInsId::PRIMARY));
+        let handler = harness.compiler.handler.clone();
+        let (_, work) = harness
+            .compiler
+            .primary
+            .may_compile_latest(&handler)
+            .unwrap();
+        let artifact = work().artifact.unwrap();
+        harness
+            .compiler
+            .process(Interrupt::Compiled(artifact.clone()));
+        harness.compiler.primary.set_demand(false);
+        harness.compiler.primary.set_demand(true);
+        let path = artifact
+            .world()
+            .file_path(artifact.world().main())
+            .unwrap()
+            .to_err()
+            .unwrap();
+        harness.compiler.process(Interrupt::Save(path.into()));
+        assert!(harness.compiler.primary.accepts_artifact(&artifact));
+        assert!(harness.compiler.primary.reason.by_fs_events);
+        harness.compiler.primary.invalidate_compiles();
+        assert!(!harness.compiler.primary.accepts_artifact(&artifact));
+    }
+
+    #[test]
+    fn dark_only_preview_keeps_one_active_cache_maintenance_owner() {
+        let mut harness = ProjectCompilerHarness::new(&[(MAIN, "#let value = 1")]);
+        let entry = harness.compiler.primary.verse.entry_state();
+        let dark = harness.compiler.restart_dedicate("dark", entry).unwrap();
+        assert_eq!(harness.compiler.cache_owner(), Some(&ProjectInsId::PRIMARY));
+        harness.compiler.primary.set_demand(false);
+        assert_eq!(harness.compiler.cache_owner(), Some(&dark));
+        harness.compiler.dedicates[0].set_demand(false);
+        assert_eq!(harness.compiler.cache_owner(), None);
+        harness.compiler.dedicates[0].set_demand(true);
+        harness.compiler.primary.set_demand(true);
+        assert_eq!(harness.compiler.cache_owner(), Some(&ProjectInsId::PRIMARY));
+    }
+
+    #[test]
+    fn superseded_queued_compile_skips_execution_and_latest_compiles() {
+        let mut harness = ProjectCompilerHarness::new(&[(MAIN, "#let value = 1")]);
+        harness
+            .compiler
+            .process(Interrupt::Compile(ProjectInsId::PRIMARY));
+        let handler = harness.compiler.handler.clone();
+        let (old_ticket, old_work) = harness
+            .compiler
+            .primary
+            .may_compile_latest(&handler)
+            .unwrap();
+        let change = harness.workspace.update_source(MAIN, "#let value = 2");
+        harness.apply_update(&change, false);
+        let old = old_work();
+        assert!(old_ticket.same_task(&old.ticket));
+        assert!(!old.executed);
+        assert!(
+            old.artifact.is_none(),
+            "obsolete queued work must not read or compile its world"
+        );
+        let (_, latest_work) = harness
+            .compiler
+            .primary
+            .may_compile_latest(&handler)
+            .unwrap();
+        let latest = latest_work();
+        assert!(latest.is_publishable());
+        assert!(latest.executed);
+        let artifact = latest.artifact.unwrap();
+        assert_eq!(artifact.error_cnt(), 0);
+        assert_eq!(
+            artifact
+                .world()
+                .source(artifact.world().main())
+                .unwrap()
+                .text(),
+            "#let value = 2",
+        );
+    }
+
+    #[test]
+    fn completed_result_becomes_stale_before_actor_publication() {
+        let mut harness = ProjectCompilerHarness::new(&[(MAIN, "#let value = 1")]);
+        harness
+            .compiler
+            .process(Interrupt::Compile(ProjectInsId::PRIMARY));
+        let handler = harness.compiler.handler.clone();
+        let (_, work) = harness
+            .compiler
+            .primary
+            .may_compile_latest(&handler)
+            .unwrap();
+        let outcome = work();
+        assert!(outcome.is_publishable());
+        let change = harness.workspace.update_source(MAIN, "#let value = 2");
+        harness.apply_update(&change, false);
+        assert!(!outcome.is_publishable());
+        let artifact = outcome.artifact.unwrap();
+        assert!(!harness.compiler.primary.accepts_artifact(&artifact));
+        harness.compiler.process(Interrupt::Compiled(artifact));
+        assert_eq!(harness.compiler.primary.committed_revision, 0);
+    }
+
+    #[test]
+    fn demand_pause_keeps_latest_changes_and_clean_resume_reuses_result() {
+        let mut harness = ProjectCompilerHarness::new(&[(MAIN, "#let value = 1")]);
+        harness.compile_primary();
+        let handler = harness.compiler.handler.clone();
+        harness
+            .compiler
+            .process(Interrupt::SetDemand(ProjectInsId::PRIMARY, false));
+        harness
+            .compiler
+            .process(Interrupt::SetDemand(ProjectInsId::PRIMARY, true));
+        assert!(
+            harness
+                .compiler
+                .primary
+                .may_compile_latest(&handler)
+                .is_none()
+        );
+
+        harness
+            .compiler
+            .process(Interrupt::SetDemand(ProjectInsId::PRIMARY, false));
+        for value in 2..5 {
+            let change = harness
+                .workspace
+                .update_source(MAIN, format!("#let value = {value}"));
+            harness.apply_update(&change, false);
+        }
+        assert!(
+            harness
+                .compiler
+                .primary
+                .may_compile_latest(&handler)
+                .is_none()
+        );
+        harness
+            .compiler
+            .process(Interrupt::SetDemand(ProjectInsId::PRIMARY, true));
+        let (_, work) = harness
+            .compiler
+            .primary
+            .may_compile_latest(&handler)
+            .unwrap();
+        let outcome = work();
+        let artifact = outcome.artifact.unwrap();
+        assert_eq!(
+            artifact
+                .world()
+                .source(artifact.world().main())
+                .unwrap()
+                .text(),
+            "#let value = 4"
+        );
+    }
+
+    #[test]
+    fn removing_project_invalidates_queued_work_without_reusing_its_lifetime() {
+        let mut harness = ProjectCompilerHarness::new(&[(MAIN, "#let value = 1")]);
+        let entry = harness.compiler.primary.verse.entry_state();
+        let id = harness
+            .compiler
+            .restart_dedicate("preview", entry.clone())
+            .unwrap();
+        let handler = harness.compiler.handler.clone();
+        let (old_ticket, old_work) = harness.compiler.dedicates[0]
+            .may_compile_latest(&handler)
+            .unwrap();
+        harness.compiler.restart_dedicate("preview", entry).unwrap();
+        let (new_ticket, _) = harness.compiler.dedicates[0]
+            .may_compile_latest(&handler)
+            .unwrap();
+        assert_eq!(old_ticket.id, id);
+        assert!(!old_ticket.same_task(&new_ticket));
+        assert!(old_work().artifact.is_none());
+    }
 
     #[test]
     fn recent_cache_retention_preserves_edit_and_revert_output() {

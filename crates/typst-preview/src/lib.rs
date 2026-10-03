@@ -4,6 +4,7 @@
 mod actor;
 mod change;
 mod debug_loc;
+mod demand;
 mod focus;
 mod outline;
 pub mod protocol;
@@ -161,13 +162,16 @@ impl Previewer {
         let idle_timeout = reflexo_typst::time::Duration::from_secs(5);
         let (conn_handler, shutdown_tx, mut shutdown_data_plane_rx) =
             self.data_plane_resources.take().unwrap();
-        let (alive_tx, mut alive_rx) = mpsc::unbounded_channel::<()>();
-
         let recv = move |conn| {
             let h = conn_handler.clone();
-            let alive_tx = alive_tx.clone();
-            tokio::spawn(async move {
-                let conn: C = caster(conn.await).unwrap();
+            async move {
+                let Some(conn) = caster(conn.await).log_error("AcceptPreviewConnection") else {
+                    return;
+                };
+                let _viewer = h.viewer_demand.as_ref().map(|demand| demand.connect());
+                // Renderers retain document snapshots and incremental rendering
+                // caches. Tie their lifetime to the socket that consumes them.
+                let mut render_tasks = tokio::task::JoinSet::new();
                 tokio::pin!(conn);
 
                 if h.enable_partial_rendering {
@@ -211,14 +215,14 @@ impl Previewer {
                             h.focus_store.is_some(),
                             h.change_tracker.clone(),
                         );
-                        tokio::spawn(render_actor.run());
+                        render_tasks.spawn(render_actor.run());
                         let outline_render_actor = actor::render::OutlineRenderActor::new(
                             h.renderer_tx.subscribe(),
                             h.doc_sender.clone(),
                             h.editor_tx.clone(),
                             h.span_interner,
                         );
-                        tokio::spawn(outline_render_actor.run());
+                        render_tasks.spawn(outline_render_actor.run());
                     }
                     ExportTarget::Html => {
                         let html_render_actor = HtmlRenderActor::new(
@@ -226,27 +230,20 @@ impl Previewer {
                             h.doc_sender.clone(),
                             svg.0,
                         );
-                        tokio::spawn(html_render_actor.run());
+                        render_tasks.spawn(html_render_actor.run());
                     }
                     ExportTarget::Bundle => {
                         log::warn!("bundle export target is not supported by preview");
                     }
                 }
 
-                struct FinallySend(mpsc::UnboundedSender<()>);
-                impl Drop for FinallySend {
-                    fn drop(&mut self) {
-                        let _ = self.0.send(());
-                    }
-                }
-
-                let _send = FinallySend(alive_tx);
                 webview_actor.run().await;
-            })
+                render_tasks.shutdown().await;
+            }
         };
 
         let data_plane_handle = tokio::spawn(async move {
-            let mut alive_cnt = 0;
+            let mut connections = tokio::task::JoinSet::new();
             let mut shutdown_bell = tokio::time::interval(idle_timeout);
             loop {
                 if shutdown_tx.is_some() {
@@ -255,16 +252,18 @@ impl Previewer {
                 tokio::select! {
                     Some(()) = shutdown_data_plane_rx.recv() => {
                         log::info!("Data plane server shutdown");
+                        connections.shutdown().await;
                         return;
                     }
                     Some(stream) = streams.recv() => {
-                        alive_cnt += 1;
-                        tokio::spawn(recv(stream));
+                        connections.spawn(recv(stream));
                     },
-                    _ = alive_rx.recv() => {
-                        alive_cnt -= 1;
+                    Some(result) = connections.join_next(), if !connections.is_empty() => {
+                        if let Err(err) = result {
+                            log::warn!("Preview connection task failed: {err}");
+                        }
                     }
-                    _ = shutdown_bell.tick(), if alive_cnt == 0 && shutdown_tx.is_some() => {
+                    _ = shutdown_bell.tick(), if connections.is_empty() && shutdown_tx.is_some() => {
                         let shutdown_tx = shutdown_tx.expect("scheduled shutdown without shutdown_tx");
                         log::info!(
                             "Data plane server has been idle for {idle_timeout:?}, shutting down."
@@ -286,6 +285,7 @@ type BroadcastChannel<T> = (broadcast::Sender<T>, broadcast::Receiver<T>);
 
 pub struct PreviewBuilder {
     config: PreviewConfig,
+    viewer_demand: Option<Arc<demand::ViewerDemand>>,
     focus_store: Option<Arc<focus::FocusStore>>,
     change_tracker: Option<Arc<change::ChangeTracker>>,
     shutdown_tx: Option<mpsc::Sender<()>>,
@@ -301,6 +301,7 @@ impl PreviewBuilder {
     pub fn new(config: PreviewConfig) -> Self {
         Self {
             config,
+            viewer_demand: None,
             focus_store: None,
             change_tracker: None,
             shutdown_tx: None,
@@ -314,6 +315,14 @@ impl PreviewBuilder {
 
     pub fn with_shutdown_tx(mut self, shutdown_tx: mpsc::Sender<()>) -> Self {
         self.shutdown_tx = Some(shutdown_tx);
+        self
+    }
+
+    /// Notify the compiler when the first viewer connects or the last one leaves.
+    /// The callback must return promptly; it is serialized across connections.
+    /// Sibling pipelines have independent demand and need their own callback.
+    pub fn with_viewer_demand(mut self, changed: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        self.viewer_demand = Some(demand::ViewerDemand::new(changed));
         self
     }
 
@@ -363,6 +372,7 @@ impl PreviewBuilder {
     pub async fn build<T: EditorServer>(self, conn: ControlPlaneTx, server: Arc<T>) -> Previewer {
         let PreviewBuilder {
             config,
+            viewer_demand,
             focus_store,
             change_tracker,
             shutdown_tx,
@@ -392,6 +402,7 @@ impl PreviewBuilder {
         // Delayed data plane binding
         let data_plane = DataPlane {
             format: config.format,
+            viewer_demand,
             focus_store,
             change_tracker,
             span_interner: span_interner.clone(),
@@ -433,12 +444,149 @@ pub type SourceLocation = reflexo_typst::debug_loc::SourceLocation;
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
     use std::sync::Arc;
+    use std::task::{Context, Poll};
 
+    use futures::{Sink, Stream};
     use reflexo_vec2svg::IncrSvgDocServer;
+    use tinymist_std::error::prelude::*;
     use tinymist_std::typst::{TypstDocument, TypstPagedDocument};
+    use tokio::sync::mpsc;
 
-    use super::{escape_html_text, protocol};
+    use super::{WsMessage, escape_html_text, protocol};
+
+    struct TestEditor;
+
+    impl super::EditorServer for TestEditor {}
+
+    #[derive(Debug)]
+    struct TestSocket {
+        incoming:
+            futures::channel::mpsc::UnboundedReceiver<Result<WsMessage, reflexo_typst::Error>>,
+    }
+
+    impl Stream for TestSocket {
+        type Item = Result<WsMessage, reflexo_typst::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Pin::new(&mut self.incoming).poll_next(cx)
+        }
+    }
+
+    impl Sink<WsMessage> for TestSocket {
+        type Error = reflexo_typst::Error;
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn start_send(self: Pin<&mut Self>, _: WsMessage) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    async fn demand_event(events: &mut mpsc::UnboundedReceiver<bool>) -> bool {
+        tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .expect("viewer demand should be updated")
+            .expect("demand observer should remain alive")
+    }
+
+    async fn renderer_count(
+        renderer: &tokio::sync::broadcast::Sender<super::RenderActorRequest>,
+        expected: usize,
+    ) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while renderer.receiver_count() != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connection-owned renderers should be started or released");
+    }
+
+    #[tokio::test]
+    async fn demand_tracks_live_viewers_and_releases_renderers_on_disconnect() {
+        let (demand_tx, mut demand_rx) = mpsc::unbounded_channel();
+        let builder = super::PreviewBuilder::new(super::PreviewConfig::default())
+            .with_viewer_demand(move |active| {
+                demand_tx.send(active).unwrap();
+            });
+        // Theme siblings must never activate each other's compiler.
+        assert!(
+            builder
+                .sibling(super::PreviewConfig::default())
+                .viewer_demand
+                .is_none()
+        );
+        let renderer = builder.renderer_mailbox.0.clone();
+        // The library test does not own the process. Standalone control mode
+        // deliberately exits the entire process when its editor actor stops.
+        let (control, _control_rx) = super::ControlPlaneTx::new(false);
+        let mut previewer = builder.build(control, Arc::new(TestEditor)).await;
+        let (streams_tx, streams_rx) = mpsc::unbounded_channel();
+        previewer.start_data_plane(streams_rx, |socket| socket);
+        assert!(demand_rx.try_recv().is_err());
+
+        // A failed HTTP upgrade must never request a compilation or leak a viewer.
+        streams_tx
+            .send(futures::future::ready(Err(error_once!(
+                "test upgrade failure"
+            ))))
+            .unwrap();
+        let (first, incoming) = futures::channel::mpsc::unbounded();
+        streams_tx
+            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .unwrap();
+        assert!(demand_event(&mut demand_rx).await);
+        renderer_count(&renderer, 2).await;
+
+        let (second, incoming) = futures::channel::mpsc::unbounded();
+        streams_tx
+            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .unwrap();
+        renderer_count(&renderer, 4).await;
+        assert!(demand_rx.try_recv().is_err());
+
+        // EOF must release this connection even while broadcast channels stay open.
+        drop(first);
+        renderer_count(&renderer, 2).await;
+        assert!(demand_rx.try_recv().is_err());
+        drop(second);
+        assert!(!demand_event(&mut demand_rx).await);
+        renderer_count(&renderer, 0).await;
+
+        let (reconnected, incoming) = futures::channel::mpsc::unbounded();
+        streams_tx
+            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .unwrap();
+        assert!(demand_event(&mut demand_rx).await);
+        reconnected
+            .unbounded_send(Ok(WsMessage::Text("invalid viewer message".into())))
+            .unwrap();
+        assert!(!demand_event(&mut demand_rx).await);
+        renderer_count(&renderer, 0).await;
+
+        // Service shutdown also releases demand for sockets that are still open.
+        let (_last, incoming) = futures::channel::mpsc::unbounded();
+        streams_tx
+            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .unwrap();
+        assert!(demand_event(&mut demand_rx).await);
+        previewer.stop().await;
+        previewer.join().await;
+        assert!(!demand_event(&mut demand_rx).await);
+        renderer_count(&renderer, 0).await;
+    }
 
     #[test]
     fn escapes_html_text_without_breaking_multibyte_code_points() {
@@ -704,6 +852,7 @@ impl CompileWatcher {
 #[derive(Clone)]
 struct DataPlane {
     format: ExportTarget,
+    viewer_demand: Option<Arc<demand::ViewerDemand>>,
     focus_store: Option<Arc<focus::FocusStore>>,
     change_tracker: Option<Arc<change::ChangeTracker>>,
     span_interner: SpanInterner,

@@ -1,0 +1,123 @@
+#set document(title: "Flow incremental compilation performance")
+#set page(paper: "a4", margin: 20mm)
+#set text(size: 10pt)
+#set heading(numbering: "1.")
+
+= Flow incremental compilation performance
+
+This change follows an investigation of a native ARM Flow installation on an
+Apple M2 with 8 GiB of memory. One editor session reported compilations of
+15.9, 12.0, 205.9, 183.1 and 127.0 seconds. Hover and semantic-token requests
+also stalled. These observations identify an interactive performance problem;
+they do not identify how much of any one compilation was CPU work, cache
+contention, queueing or memory pressure.
+
+== Implemented behavior
+
+Compilation logs now identify the project, revision, queue wait, execution,
+diagnostics, total elapsed time and whether the snapshot was superseded.
+Memory observations describe the whole process, including physical footprint
+on macOS; they are not per-compilation allocation measurements.
+
+Queued work checks its revision and project lifetime before executing.
+Completed work is acknowledged by the project actor before it can publish a
+result. A late worker cannot release a replacement worker's admission slot.
+The editor also checks diagnostic tickets when it consumes queued updates.
+Already-running Typst evaluation finishes safely; this change does not add
+mid-instruction cancellation to Typst or its WASM interpreter.
+
+Themed standalone previews start without compiling either palette. A palette
+becomes active when its first viewer connects, and becomes idle after its last
+viewer disconnects. Input state remains current while idle. WebSocket EOF now
+terminates its actor, and connection-owned render and outline tasks stop with
+that connection. Previously, an open broadcast channel could keep those tasks
+alive after the socket had ended.
+
+Cache maintenance has one active owner even when only the dedicated dark
+project is used. Superseded work that actually executed can request maintenance;
+skipping a queued task does not advance cache ages.
+
+== Expensive byte results
+
+The vendored comemo 0.5.1 patch keeps normal lookup hashes and dependency
+validation. It permits opt-in extended retention for successful, dependency-free
+`StrResult<Bytes>` results whose computation took at least 50 milliseconds.
+This includes Typst plugin byte outputs, but does not retain plugin instances,
+WASM stores, errors or calls with tracked dependencies or mutations through
+the extended budget.
+
+The policy allows at most 64 protected entries and 64 MiB of reported output
+payload, with at most 16 unused eviction sweeps. macOS warning pressure lowers
+the payload budget to 16 MiB; critical pressure removes extended protection.
+When pressure information is unavailable, the normal budget applies. Manual
+`comemo::evict(0)` clears protected entries too. These limits describe logical
+output payloads, not total allocations, ordinary caches, or process RSS.
+
+Maintenance logs include cumulative `expensive_compute_count` and
+`expensive_compute_time` for eligible costly byte computations, including those
+that could not reserve space in the budget. `protected_hits` counts reuse of
+protected entries separately; these counters do not describe the whole compiler's
+cache hit rate. Computation timing stops before cache insertion. Nested calls can
+overlap, so summed computation times do not measure elapsed time or time saved.
+
+Expired outputs and tracked calls are detached while holding their cache lock
+and destroyed after releasing it. Eviction callbacks also run without holding
+the global registration lock. Insertion-conflict destruction is unchanged.
+
+== Native macOS execution
+
+Rayon workers receive a user-initiated QoS baseline. Compilation and semantic
+analysis use scoped user-initiated QoS; cache maintenance uses utility QoS and
+restores the worker's previous class when it finishes. macOS chooses the actual
+cores. The application does not pin threads to performance cores or infer core
+assignment from QoS. Critical memory pressure limits simultaneous project
+compilations while allowing at least one pending task to make progress.
+
+The app's LaunchAgent declares interactive work. The `flow-release` Cargo
+profile enables ThinLTO, and `flow-app.py build --build-engine` records the native
+target and build settings. No Metal backend, PGO training or WASM JIT is part
+of this change.
+
+== Reproduction
+
+The integration harness uses disposable documents, ports and focus stores:
+
+```sh
+python3 tests/perf/incremental-performance/preview_demand.py \
+  --baseline /path/to/baseline --candidate /path/to/candidate \
+  --output /path/to/results/preview-demand.json
+```
+
+The PDE replay uses an isolated snapshot and modifies only in-memory documents:
+
+```sh
+python3 tests/perf/incremental-performance/book_replay.py \
+  --binary /path/to/engine --book /path/to/book-snapshot \
+  --output /path/to/results/engine --modes compile mixed --rounds 6
+```
+
+Replay output records exact protocol replies, input hashes, receipt times,
+compilation logs and process memory. The footprint guard stops the harness's
+own server if the requested budget is exceeded. Baseline and candidate run
+sequentially with identical inputs; unrelated activity on the shared Mac can
+still affect timings. Separate LSP and standalone processes do not share their
+in-memory compiler caches.
+
+Each in-memory edit includes a tiny text probe with a unique, intentionally
+missing font. Its compiler warning identifies the newest compiled source.
+`edit_result_seconds` ends when that exact diagnostic arrives; it includes
+diagnostic conversion and publication. Word-count status repeats and older
+compilation notifications cannot satisfy this endpoint. The probe is never
+written to the book snapshot or the user's sources.
+
+== Validation results
+
+Native library tests passed: 95 language-server, 10 preview and 29 project
+tests, with eight pre-existing ignored cases. Three macOS scheduling/memory
+tests and 31 comemo unit, integration and documentation tests also passed.
+Strict Clippy passed for affected native crates and the minimal, preview and
+web feature combinations on the ARM Mac host. These feature checks are not a
+cross-compilation to WebAssembly. Formatting and Python syntax checks passed.
+
+Runtime comparison and packaged-app validation follow the optimized candidate
+build. The original 183-second event has not been retrospectively decomposed.

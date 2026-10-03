@@ -28,6 +28,12 @@ pub struct ProjectPreviewHandler {
 }
 
 impl ProjectPreviewHandler {
+    /// Pause compilation while no viewer consumes this preview variant.
+    pub fn set_viewer_demand(&self, active: bool) {
+        self.client
+            .interrupt(LspInterrupt::SetDemand(self.project_id.clone(), active));
+    }
+
     /// Requests the compiler to compile the project.
     pub fn flush_compile(&self) {
         let _ = self.project_id;

@@ -115,6 +115,10 @@ pub async fn preview_main(mut args: PreviewCliArgs) -> Result<()> {
             next(compiler, intr)
         });
 
+        if args.follow_system_theme {
+            service.compiler.primary.set_demand(false);
+        }
+
         // Consume editor_rx
         tokio::spawn(async move { while editor_rx.recv().await.is_some() {} });
 
@@ -138,6 +142,7 @@ pub async fn preview_main(mut args: PreviewCliArgs) -> Result<()> {
             project
                 .verse
                 .increment_revision(|verse| verse.set_inputs(inputs));
+            project.set_demand(false);
             if !preview_state.register(
                 &dark_id,
                 dark_builder
@@ -246,6 +251,12 @@ pub async fn preview_main(mut args: PreviewCliArgs) -> Result<()> {
     });
 
     let (websocket_tx, websocket_rx) = mpsc::unbounded_channel();
+    let previewer = if args.follow_system_theme {
+        let handle = handle.clone();
+        previewer.with_viewer_demand(move |active| handle.set_viewer_demand(active))
+    } else {
+        previewer
+    };
     let mut previewer = previewer.build(lsp_tx, handle.clone()).await;
     let dark_websocket_tx = if let (Some(builder), Some(handle)) = (dark_builder, dark_handle) {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -256,7 +267,11 @@ pub async fn preview_main(mut args: PreviewCliArgs) -> Result<()> {
             while control_rx.resp_rx.recv().await.is_some() {}
             drop(control_rx);
         });
-        let mut dark_previewer = builder.build(control_tx, handle).await;
+        let demand_handle = handle.clone();
+        let mut dark_previewer = builder
+            .with_viewer_demand(move |active| demand_handle.set_viewer_demand(active))
+            .build(control_tx, handle)
+            .await;
         bind_streams(&mut dark_previewer, rx);
         tokio::spawn(dark_previewer.join());
         Some(tx)

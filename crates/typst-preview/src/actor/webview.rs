@@ -156,7 +156,10 @@ where
                     self.webview_websocket_conn.send(WsMessage::Binary(svg.into()))
                     .await.log_error("WebViewActor");
                 }
-                Some(msg) = self.webview_websocket_conn.next() => {
+                msg = self.webview_websocket_conn.next() => {
+                    let Some(msg) = msg else {
+                        break;
+                    };
                     log::trace!("WebviewActor: received message from websocket: {msg:?}");
                     let Ok(msg) = msg else {
                         log::info!("WebviewActor: no more messages from websocket: {}", msg.unwrap_err());
