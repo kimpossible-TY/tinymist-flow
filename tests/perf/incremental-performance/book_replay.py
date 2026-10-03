@@ -8,6 +8,9 @@ network transport. Every edit uses a unique, intentionally missing font family
 in a tiny text probe. Its successful-compilation warning proves that the newest
 source reached compilation. Edit-result latency ends when that exact diagnostic
 arrives, including diagnostic conversion and delivery; it is not pure CPU time.
+Warmup also waits for a successful-compilation quiet window so initial dependency
+watch enrollment can finish before measured edits begin. Query errors remain
+failures; stabilization does not retry or discard measured requests.
 Footprint is macOS process footprint, not resident memory.
 """
 
@@ -195,6 +198,7 @@ class Session:
         self.compile_status = None
         self.compile_successes = 0
         self.status_at = self.started
+        self.compile_activity_at = self.started
         self.diagnostic_markers = {}
         self.events_path = (output / "events.jsonl").open("w")
 
@@ -251,11 +255,14 @@ class Session:
             # not move the time at which a status transition was observed.
             if self.compile_status != previous:
                 self.status_at = received
+            if self.compile_status != previous or self.compile_status == "compiling":
+                self.compile_activity_at = received
             if self.compile_status == "compileSuccess" and previous == "compiling":
                 self.compile_successes += 1
             self.event("compile_status", status=self.compile_status, page_count=params.get("pageCount"),
                        received_at=received - self.started)
         elif message.get("method") == "textDocument/publishDiagnostics":
+            self.compile_activity_at = received
             params = message.get("params", {})
             uri = params.get("uri", "")
             diagnostics = params.get("diagnostics", [])
@@ -308,6 +315,33 @@ class Session:
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"no successful compilation diagnostic for {marker}: status={self.compile_status}"
+                )
+
+    def stabilize_warm(self, quiet_seconds, timeout):
+        """Allow startup dependency watches to settle outside measured rounds.
+
+        This is an observed quiet window, not a server-side readiness barrier.
+        Success repeats from word-count updates do not restart the window, but
+        compilation starts, status transitions and diagnostic publications do.
+        """
+        started = time.monotonic()
+        deadline = started + timeout
+        self.event("warm_stabilization_start", quiet_seconds=quiet_seconds)
+        while True:
+            self.pump_one(min(0.1, max(0, deadline - time.monotonic())))
+            now = time.monotonic()
+            quiet_since = max(started, self.compile_activity_at)
+            if (self.compile_status == "compileSuccess"
+                    and now - quiet_since >= quiet_seconds
+                    and self.client.messages.empty()):
+                elapsed = now - started
+                self.event("warm_stabilization_complete", quiet_seconds=quiet_seconds,
+                           seconds=elapsed)
+                return elapsed
+            if now >= deadline:
+                raise TimeoutError(
+                    f"warm compilation did not stay successful and quiet for {quiet_seconds}s: "
+                    f"status={self.compile_status}"
                 )
 
     def stats(self, label, timeout):
@@ -384,6 +418,7 @@ def trial(args, mode):
     result = {"mode": mode, "binary": str(args.binary), "binary_sha256": sha256(args.binary),
               "book": str(args.book), "rounds_requested": args.rounds, "rounds_completed": 0,
               "max_footprint_gib": args.max_footprint_gib, "config": config,
+              "warm_quiet_seconds": args.warm_quiet_seconds,
               "mach_timebase": {"numer": TIMEBASE.numer, "denom": TIMEBASE.denom},
               "source_hashes": {str(p): sha256(p) for p in (entry, chapter)},
               "events": [], "memory": [], "responses": {}, "unexpected_responses": [], "diagnostics": {},
@@ -395,6 +430,7 @@ def trial(args, mode):
                         "Completion probes the existing local-tag-scope callback; trace/evaluation counts determine its execution path.",
                         "QueryQueue timing measures semantic admission wait, not internal comemo lock wait.",
                         "Other editor/process activity can affect latency and memory pressure.",
+                        "Warmup waits for a successful-compilation quiet window after the warm marker to let dependency watches settle; latest-query errors still fail the run.",
                         "Every version adds an intentional unknown-font warning and tiny fallback glyph; the exact warning proves compilation of that version.",
                         "Edit-result latency includes diagnostic conversion and publication; compileStatus is not revision correlated and is not a timing endpoint."]}
     session = Session(str(args.binary), args.book, config, output, result)
@@ -444,6 +480,7 @@ def trial(args, mode):
                         "pin", args.timeout)
         session.settle(chapter.as_uri(), warm_marker, warm_sent, args.timeout)
         session.event("warm_compile")
+        result["warm_stabilization_seconds"] = session.stabilize_warm(args.warm_quiet_seconds, args.timeout)
         session.stats("warm", args.timeout)
         td = {"uri": chapter.as_uri()}
         completion = {"textDocument": td, "position": cursor,
@@ -596,6 +633,8 @@ def compare(left, right, output):
             "left_edit_result_seconds": a.get("edit_result_seconds", []),
             "right_edit_result_seconds": b.get("edit_result_seconds", []),
             "edit_result_metric_matches": bool(a.get("edit_result_metric")) and a.get("edit_result_metric") == b.get("edit_result_metric"),
+            "warmup_policy_matches": (a.get("warm_quiet_seconds") is not None
+                                      and a.get("warm_quiet_seconds") == b.get("warm_quiet_seconds")),
             "left_latest_latency": latest_latencies(a, a["rounds_completed"]),
             "right_latest_latency": latest_latencies(b, b["rounds_completed"]),
             "comparable_completed_rounds": shared_rounds,
@@ -624,6 +663,8 @@ def main():
     parser.add_argument("--max-footprint-gib", type=float, default=5)
     parser.add_argument("--cancel-delay", type=float, default=0.05)
     parser.add_argument("--idle-seconds", type=float, default=5)
+    parser.add_argument("--warm-quiet-seconds", type=float, default=3,
+                        help="successful-compilation quiet window before measured edits (default: 3)")
     parser.add_argument("--package-cache", type=Path, default=Path.home() / "Library/Caches/typst/packages")
     parser.add_argument("--require-cancellation", action="store_true", help="require mixed/cancel modes to demonstrate cancelled and stale responses (candidate only)")
     parser.add_argument("--compare", type=Path, nargs=2, metavar=("BASELINE_DIR", "CANDIDATE_DIR"))
@@ -637,6 +678,8 @@ def main():
         parser.error("--binary, --output-dir and --book are required")
     if args.rounds < 1 or not 0 < args.max_footprint_gib <= 5:
         parser.error("rounds must be positive and the memory limit must be at most 5 GiB")
+    if not 0 < args.warm_quiet_seconds < args.timeout:
+        parser.error("warm quiet seconds must be positive and shorter than the request timeout")
     args.binary, args.book = Path(runner.resolve_binary(str(args.binary))), args.book.resolve()
     args.package_cache = args.package_cache.resolve()
     if LIBPROC is None:

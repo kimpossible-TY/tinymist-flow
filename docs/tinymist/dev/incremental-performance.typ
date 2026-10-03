@@ -96,11 +96,11 @@ recorded results:
 python3 tests/perf/incremental-performance/book_replay.py \
   --binary /path/to/baseline --book /path/to/book-snapshot \
   --output /path/to/results/baseline --modes compile mixed --rounds 6 \
-  --timeout 300 --max-footprint-gib 5
+  --timeout 300 --max-footprint-gib 5 --warm-quiet-seconds 3
 python3 tests/perf/incremental-performance/book_replay.py \
   --binary /path/to/candidate --book /path/to/book-snapshot \
   --output /path/to/results/candidate --modes compile mixed --rounds 6 \
-  --timeout 300 --max-footprint-gib 5
+  --timeout 300 --max-footprint-gib 5 --warm-quiet-seconds 3
 python3 tests/perf/incremental-performance/book_replay.py \
   --compare /path/to/results/baseline /path/to/results/candidate \
   --output /path/to/results/comparison
@@ -120,10 +120,17 @@ diagnostic conversion and publication. Word-count status repeats and older
 compilation notifications cannot satisfy this endpoint. The probe is never
 written to the book snapshot or the user's sources.
 
+After the warm marker arrives, the harness requires three seconds of successful
+compilation without new compile activity or diagnostic publications. This lets
+initial dependency-watch enrollment settle before measured edits. The duration
+is configurable with `--warm-quiet-seconds` and recorded in the results; it is
+an observed quiet window rather than a server readiness guarantee. A latest-query
+failure still fails the run, and measured requests are never silently retried.
+
 Both runs must complete without a footprint-limit stop, and their input hashes,
-token legends and comparable protocol responses must agree before interpreting
-latency changes. Six rounds provide a small exploratory sample; retain the raw
-values and report the median and range. A p95 from six observations is effectively
+warmup settings, token legends and comparable protocol responses must agree
+before interpreting latency changes. Six rounds provide a small exploratory
+sample; retain the raw values and report the median and range. A p95 from six observations is effectively
 the largest sample. Close results need more rounds or a reversed execution order.
 
 == Validation commands
