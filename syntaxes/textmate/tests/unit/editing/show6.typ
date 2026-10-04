@@ -1,4 +1,0 @@
-
-#show text.where()
-
-test

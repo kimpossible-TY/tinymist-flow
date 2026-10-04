@@ -1,7 +1,0 @@
-= Test
-
- #! syntax
-
-#! syntax
-
-# ! syntax

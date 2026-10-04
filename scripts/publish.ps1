@@ -1,1 +1,0 @@
-cargo publish -p tinymist-assets --allow-dirty

@@ -1,5 +1,12 @@
 schema: spec-driven
 
+context: |
+  Product: tinymist-flow, a native macOS app built with Swift/AppKit and Python packaging.
+  Scope: project profiles, preview lifecycle, packaging, branding, app tests, and documentation.
+  A compatible external tinymist executable supplies compilation and rendering; engine sources are not maintained here.
+  Preserve existing preview CLI and environment contracts and Apache License 2.0 notices.
+  Use Conventional Commits and isolated test profiles; generated Markdown comes from Typst sources.
+
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.

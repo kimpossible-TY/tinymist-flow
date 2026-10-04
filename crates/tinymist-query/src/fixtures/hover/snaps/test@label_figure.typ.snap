@@ -1,8 +1,0 @@
----
-source: crates/tinymist-query/src/hover.rs
-expression: content
-input_file: crates/tinymist-query/src/fixtures/hover/label_figure.typ
----
-Range: 3:37:3:48
-
-Label: `fig:test1`

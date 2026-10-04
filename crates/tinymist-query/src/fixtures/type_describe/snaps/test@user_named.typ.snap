@@ -1,7 +1,0 @@
----
-source: crates/tinymist-query/src/analysis.rs
-description: "Check on \"tmpl\" (95)"
-expression: post_ty
-input_file: crates/tinymist-query/src/fixtures/type_describe/user_named.typ
----
-(any, font: array | none | text.font) => any

@@ -1,6 +1,0 @@
->#{
-#^ source.typst keyword.control.hash.typst
-# ^ source.typst meta.brace.curly.typst
->  
->}
-#^ source.typst meta.brace.curly.typst

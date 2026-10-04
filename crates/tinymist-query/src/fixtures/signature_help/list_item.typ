@@ -1,1 +1,0 @@
-#show list.item.where(/* loc 0, 0 */): it => it

@@ -1,9 +1,0 @@
-.vscode/**
-.vscode-test/**
-fixtures/**
-scripts/**
-src/**
-node_modules/**
-tsconfig.json
-*.vsix
-**/*.map

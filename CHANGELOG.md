@@ -1,1 +1,0 @@
-[CHANGELOG.md](./editors/vscode/CHANGELOG.md)

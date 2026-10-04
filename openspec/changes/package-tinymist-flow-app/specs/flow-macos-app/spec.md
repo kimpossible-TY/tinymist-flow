@@ -1,5 +1,27 @@
 ## ADDED Requirements
 
+### Requirement: Flow-only source repository
+The repository SHALL maintain only the native Flow app, packaging, branding, app tests, app documentation, and Flow-specific workflow contracts. The engine implementation, editor integrations, and their build and test workspaces SHALL be excluded from the maintained source tree. Prior source history and applicable license notices SHALL be preserved.
+
+#### Scenario: Build from an app-only checkout
+- **WHEN** a compatible external engine executable is supplied to an app-only checkout
+- **THEN** the app can be built and tested without an engine source workspace
+- **AND** the engine is copied into the app bundle independently of the Flow source revision
+- **AND** current preview lifecycle and engine feature arguments are preserved
+
+### Requirement: External engine input
+Packaging SHALL accept an explicit engine path or FLOW_ENGINE_PATH and otherwise use the current installed Flow engine. The input SHALL be checked before an existing build output is replaced. The release manifest SHALL identify the external engine by version and hashes in addition to the Flow source revision.
+
+#### Scenario: Reuse an installed engine
+- **WHEN** Flow is rebuilt using the current installed engine
+- **THEN** the engine sources are not needed
+- **AND** the installed app, project settings, and running previews are unchanged by the build
+
+#### Scenario: Reject an incompatible or missing engine
+- **WHEN** the supplied engine is missing or lacks the required preview CLI support
+- **THEN** packaging reports an actionable error
+- **AND** an existing output bundle is preserved
+
 ### Requirement: Product repository identity
 The development repository SHALL be named tinymist-flow to match the product. Current documentation and local remote URLs SHALL use this name. The earlier independent repository SHALL be retained as tinymist-flow-archive.
 

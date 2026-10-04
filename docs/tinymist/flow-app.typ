@@ -42,19 +42,18 @@ Standalone paged preview can opt in by setting `TINYMIST_PREVIEW_CHANGE_FILE` to
 - Previous app bundles: Application Support's `releases/` folder
 - LaunchAgents: `~/Library/LaunchAgents/`
 
-Flow owns compilation, project profiles and preview lifecycle. Tail Hosting owns Tailscale HTTPS routes and remote access policy. Changing a local port requires updating its Tail Hosting route. Original Typst source files stay in their project folders.
+Flow manages engine execution, project profiles and preview lifecycle. Tail Hosting owns Tailscale HTTPS routes and remote access policy. Changing a local port requires updating its Tail Hosting route. Original Typst source files stay in their project folders.
 
 = Build and install
 
 From the repository:
 ```sh
-node scripts/build.mjs build:preview
-cargo build --locked --release --bin tinymist
 python3 scripts/flow-app.py build --version 0.1.0
+python3 -m unittest discover -s tests/flow-app -v
 python3 scripts/flow-app.py install dist/tinymist-flow.app
 ```
 
-The app's installed engine is a copy. Rebuilding `target/release/tinymist` does not replace the running installation. AppKit and Foundation are the only app runtime dependencies; packaging uses the local Swift compiler and Python 3.
+Packaging uses a compatible external engine. It chooses `--engine /absolute/path/to/flow-engine`, then `FLOW_ENGINE_PATH`, then the engine in the current installed app. A fresh machine needs a compatible engine from an existing Flow bundle. The build checks required preview CLI support and copies the executable into a new app; engine sources are not needed. The installed engine is independent of build output. AppKit and Foundation are the app runtime dependencies; packaging uses the local Swift compiler and Python 3.
 
 The app keeps the upstream engine protocol and VS Code configuration names. For the installed engine, set `tinymist.serverPath` to the absolute path ending in `tinymist-flow.app/Contents/MacOS/flow-engine`. Remote VS Code settings must refer to the remote host's installed path.
 
@@ -71,7 +70,7 @@ python3 scripts/flow-app.py verify ~/Applications/tinymist-flow.app
 python3 scripts/flow-app.py rollback
 ```
 
-Rollback restores the previous app while preserving profiles and source files. Keep the backup until the new version is confirmed. Release metadata records the source revision, dirty-worktree flag, engine hash, version and signing mode. Tag confirmed installed releases as `flow-vX.Y.Z`; retain one code commit per feature and a separate deployment record.
+Rollback restores the previous app while preserving profiles and source files. Keep the backup until the new version is confirmed. Release metadata records the Flow source revision, dirty-worktree flag, external engine version and input hash, bundled engine hash, app version and signing mode. Tag confirmed installed releases as `flow-vX.Y.Z`; retain one code commit per feature and a separate deployment record.
 
 = Tail Hosting migration
 
@@ -87,8 +86,8 @@ python3 scripts/flow-app.py restore-tail-hosting
 
 The restore command reinstates the old registry, launcher and preview LaunchAgent from the migration backup. Unrelated hosted services are preserved. The adapter does not create or change Tailscale Serve routes.
 
-= Maintaining the personal fork
+= Maintaining the Flow app
 
-Use one repository for the engine, app, assets and deployment tools. Keep new app work in `apps/macos`, branding in `assets/branding`, and behavior contracts in OpenSpec. Small local fixes can stay lightweight. Preserve upstream copyright, Apache License 2.0, and third-party notices.
+Use this repository for the app, branding, packaging, app tests, and documentation. Keep app work in `apps/macos`, branding in `assets/branding`, and behavior contracts in OpenSpec. Engine executables are external inputs; the existing compatible engine supplies mobile selection, assistant focus, device themes, and change restoration. Small local fixes can stay lightweight. Preserve upstream copyright, Apache License 2.0, and applicable third-party notices.
 
-Fetch upstream deliberately and inspect changes before merging or cherry-picking. Prefer targeted fixes and record their upstream commits. Test engine changes separately from app packaging. Internal crate names and protocol identifiers remain compatible to reduce merge conflicts. The active source repository is `kimpossible-TY/tinymist-flow`, matching the product name. The earlier separate repository is retained as `kimpossible-TY/tinymist-flow-archive` for historical storage.
+Test a replacement engine for compatibility before bundling it, and keep its version and hash alongside the Flow source revision. App work does not require rebuilding or maintaining the language server. The source repository is `kimpossible-TY/tinymist-flow`. Previous engine and editor implementations remain in Git history, and the earlier independent repository is retained as `kimpossible-TY/tinymist-flow-archive`.

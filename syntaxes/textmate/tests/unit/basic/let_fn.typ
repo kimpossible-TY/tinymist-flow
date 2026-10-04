@@ -1,9 +1,0 @@
-#let f() = 1;
-#let f(a) = 1;
-#let f(a, b: none) = 1;
-#let f(a, (b, c)) = 1;
-#let f(a, (b, c: d)) = 1;
-#let f((a, b)) = 1;
-#let f((a, (c: (b: e)))) = 1;
-#let f((a, ..)) = 1;
-#let f((.., a)) = 1;

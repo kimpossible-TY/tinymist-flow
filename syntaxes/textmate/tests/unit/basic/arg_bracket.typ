@@ -1,5 +1,0 @@
-
-#text(
-  [string is [gissssssss...
-  ],
-)

@@ -1,1 +1,0 @@
-#show math.underline.where(/* loc 0, 0 */): it => it

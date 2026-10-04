@@ -56,15 +56,35 @@ def validate(app):
     run([app / 'Contents/MacOS/flow-engine', '--version'], stdout=subprocess.DEVNULL)
     return manifest
 
+def resolve_engine(requested=None):
+    selected = requested or os.environ.get('FLOW_ENGINE_PATH') or DEFAULT_APP / 'Contents/MacOS/flow-engine'
+    engine = Path(selected).expanduser().resolve()
+    if not engine.is_file() or not os.access(engine, os.X_OK):
+        raise ValueError('A compatible external engine is required. Pass --engine /path/to/flow-engine '
+                         'or set FLOW_ENGINE_PATH; the installed Flow engine is the default.')
+    version = capture([engine, '--version'])
+    if '--follow-system-theme' not in capture([engine, 'preview', '--help']):
+        raise ValueError('The external engine must support Flow preview features, including '
+                         '--follow-system-theme. Reuse a compatible installed Flow engine.')
+    return engine, version
+
 def build(args):
-    app = args.output.resolve()
-    if app.exists():
-        if app.name != 'tinymist-flow.app': raise ValueError('Unexpected output app name')
-        shutil.rmtree(app)
+    engine, engine_version = resolve_engine(args.engine)
+    app = args.output.expanduser().resolve()
+    if app.name != 'tinymist-flow.app': raise ValueError('Unexpected output app name')
+    app.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.flow-build-', dir=app.parent) as tmp:
+        staged = Path(tmp) / app.name
+        manifest = build_bundle(args, staged, engine, engine_version)
+        if app.exists(): shutil.rmtree(app)
+        os.replace(staged, app)
+    write_json(app.parent / 'release.json', {**manifest, 'appExecutableSHA256': digest(executable(app))})
+    print(app)
+
+def build_bundle(args, app, engine, engine_version):
     mac = app / 'Contents/MacOS'; resources = app / 'Contents/Resources'
     mac.mkdir(parents=True); resources.mkdir()
-    engine = args.engine.resolve()
-    run([engine, '--version'], stdout=subprocess.DEVNULL)
+    engine_input_hash = digest(engine)
     shutil.copy2(engine, mac / 'flow-engine')
     run(['/usr/bin/swiftc', '-swift-version', '5', '-warnings-as-errors', '-O',
          ROOT / 'apps/macos/FlowCore.swift', ROOT / 'apps/macos/main.swift', '-o', mac / 'tinymist-flow'])
@@ -96,13 +116,14 @@ def build(args):
     run(['/usr/bin/codesign', '--force', '--sign', identity, '--identifier', APP_ID + '.engine', mac / 'flow-engine'])
     manifest = {'version': version, 'sourceRevision': capture(['git', '-C', ROOT, 'rev-parse', 'HEAD']),
                 'sourceDirty': bool(capture(['git', '-C', ROOT, 'status', '--porcelain'])),
+                'engineSource': 'external', 'engineVersion': engine_version,
+                'engineInputSHA256': engine_input_hash,
                 'engineSHA256': digest(mac / 'flow-engine'), 'signing': 'ad-hoc' if identity == '-' else identity,
                 'builtAt': dt.datetime.now(dt.timezone.utc).isoformat()}
     write_json(resources / 'release.json', manifest)
     run(['/usr/bin/codesign', '--force', '--sign', identity, '--identifier', APP_ID, app])
     validate(app)
-    write_json(app.parent / 'release.json', {**manifest, 'appExecutableSHA256': digest(executable(app))})
-    print(app)
+    return manifest
 
 def profiles(app):
     if not executable(app).exists(): return []
@@ -234,7 +255,7 @@ def restore_hosting(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest='command', required=True)
-    b = sub.add_parser('build'); b.add_argument('--engine', type=Path, default=ROOT / 'target/release/tinymist'); b.add_argument('--output', type=Path, default=ROOT / 'dist/tinymist-flow.app'); b.add_argument('--version', default='0.1.0'); b.add_argument('--identity', default=os.environ.get('FLOW_SIGN_IDENTITY', '-')); b.set_defaults(func=build)
+    b = sub.add_parser('build'); b.add_argument('--engine', type=Path, help='External Flow-compatible engine (FLOW_ENGINE_PATH or installed app by default)'); b.add_argument('--output', type=Path, default=ROOT / 'dist/tinymist-flow.app'); b.add_argument('--version', default='0.1.0'); b.add_argument('--identity', default=os.environ.get('FLOW_SIGN_IDENTITY', '-')); b.set_defaults(func=build)
     i = sub.add_parser('install'); i.add_argument('source', type=Path); i.add_argument('--app', type=Path, default=DEFAULT_APP); i.set_defaults(func=install)
     r = sub.add_parser('rollback'); r.add_argument('--app', type=Path, default=DEFAULT_APP); r.set_defaults(func=rollback)
     m = sub.add_parser('migrate-tail-hosting'); m.add_argument('root', type=Path); m.add_argument('--app', type=Path, default=DEFAULT_APP); m.set_defaults(func=migrate)

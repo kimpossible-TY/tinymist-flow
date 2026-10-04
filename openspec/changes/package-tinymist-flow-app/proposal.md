@@ -1,6 +1,6 @@
 ## Why
 
-The personal fork now owns mobile preview, editing performance, and Codex context sharing, but deployment still executes a development build named Tinymist. A branded macOS app needs a stable installation, project settings, visible service controls, and recoverable updates.
+Flow needs a stable branded macOS installation, project settings, visible preview controls, and recoverable updates. These app responsibilities can be maintained independently of the engine implementation. The repository should own only Flow sources while continuing to bundle the existing compatible tinymist executable and preserve its preview features.
 
 ## What Changes
 
@@ -9,8 +9,10 @@ The personal fork now owns mobile preview, editing performance, and Codex contex
 - Install the engine inside the app, with settings and logs in standard user Library locations.
 - Add verified local update and rollback commands, release manifests, and installed-version tags.
 - Import existing Tail Hosting configuration and keep HTTPS ingress owned by Tail Hosting.
-- Document personal-fork workflow, upstream maintenance, deployment, and recovery.
+- Document app maintenance, external engine compatibility, deployment, and recovery.
 - Align the development repository name and documentation with tinymist-flow, retaining the earlier independent repository as tinymist-flow-archive.
+- Manage only Flow app sources, packaging, branding, app tests, and app documentation; consume the existing compatible preview engine as an external binary.
+- Remove the engine workspace, editor integrations, unrelated fixtures, documentation, and release tooling from the maintained tree.
 
 ## Capabilities
 
@@ -21,4 +23,4 @@ The personal fork now owns mobile preview, editing performance, and Codex contex
 
 ## Impact
 
-New `apps/macos`, `assets/branding`, packaging and validation scripts, project README source, and a migration adapter for the existing local Tail Hosting installation. Engine crates and editor protocol identifiers remain compatible.
+Maintained sources are `apps/macos`, `assets/branding`, app packaging and tests, standalone Typst documentation, and the Tail Hosting adapter. The engine is an external executable with its existing preview contract. Engine crates, editor extensions, and unrelated upstream workspaces and release tooling are removed from the maintained tree.

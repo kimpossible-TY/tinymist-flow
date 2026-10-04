@@ -1,1 +1,0 @@
-#figure[test] <fig:dingens>

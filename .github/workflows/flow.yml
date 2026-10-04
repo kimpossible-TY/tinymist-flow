@@ -1,0 +1,30 @@
+name: Flow app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Test current Swift sources and packaging
+        run: python3 -m unittest discover -s tests/flow-app -v
+      - name: Check documentation generator syntax
+        run: node --check scripts/link-docs.mjs
+      - uses: typst-community/setup-typst@v4
+      - name: Compile Flow documentation
+        run: |
+          mkdir -p dist/docs
+          typst compile --root . docs/tinymist/tinymist-flow.typ dist/docs/README.pdf
+          typst compile --root . docs/tinymist/dev/development.typ dist/docs/development.pdf
+          typst compile --root . docs/tinymist/flow-app.typ dist/docs/UserGuide.pdf

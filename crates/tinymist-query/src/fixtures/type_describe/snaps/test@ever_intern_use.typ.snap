@@ -1,7 +1,0 @@
----
-source: crates/tinymist-query/src/analysis.rs
-description: "Check on \"tmpl\" (113)"
-expression: post_ty
-input_file: crates/tinymist-query/src/fixtures/type_describe/ever_intern_use.typ
----
-(any) => 3

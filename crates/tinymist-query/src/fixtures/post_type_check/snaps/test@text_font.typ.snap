@@ -1,7 +1,0 @@
----
-source: crates/tinymist-query/src/analysis.rs
-description: "Check on \"\\\"Test\\\"\" (30)"
-expression: post_ty
-input_file: crates/tinymist-query/src/fixtures/post_type_check/text_font.typ
----
-( ⪰ "Test" ⪯ (TextFont | Array<TextFont>))

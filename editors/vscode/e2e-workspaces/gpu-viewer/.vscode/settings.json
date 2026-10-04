@@ -1,6 +1,0 @@
-{
-  "tinymist.previewFeature": "enable",
-  "tinymist.previewer": "myriad-dreamin.tinymist-gpu-viewer",
-  "tinymist.preview.refresh": "onType",
-  "tinymist.exportPdf": "never"
-}

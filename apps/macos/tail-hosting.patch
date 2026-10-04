@@ -23,7 +23,7 @@
          if time.time()-saved['checkedAt'] < (300 if saved.get('state')=='ok' else 30) and saved.get('fingerprint') == current_fingerprint: return saved
      except Exception: pass
 -    binary=pathlib.Path('/Users/taeyoung/Developer/tinymist/target/release/tinymist')
-+    binary=pathlib.Path(s.get('enginePath','/Users/taeyoung/Developer/tinymist/target/release/tinymist'))
++    binary=pathlib.Path(s.get('enginePath',str(HOME/'Applications/tinymist-flow.app/Contents/MacOS/flow-engine')))
      if not binary.exists(): return {'state':'unknown','checkedAt':time.time()}
      # Compile to a temporary target so this check never writes into the user's project.
      fd,out=tempfile.mkstemp(suffix='.pdf',dir=RUNTIME); os.close(fd); output=pathlib.Path(out)
@@ -34,7 +34,7 @@
 -    project=pathlib.Path(s['projectRoot']); binary=pathlib.Path('/Users/taeyoung/Developer/tinymist/target/release/tinymist')
 +    if s.get('managerBinary'):
 +        return plistlib.loads(require([s['managerBinary'],'--agent-plist',s['id']]).encode())
-+    project=pathlib.Path(s['projectRoot']); binary=pathlib.Path(s.get('enginePath','/Users/taeyoung/Developer/tinymist/target/release/tinymist'))
++    project=pathlib.Path(s['projectRoot']); binary=pathlib.Path(s.get('enginePath',str(HOME/'Applications/tinymist-flow.app/Contents/MacOS/flow-engine')))
      if not binary.exists(): raise RuntimeError(f'Tinymist binary missing: {binary}')
      font=project/'fonts'; packages=HOME/'Library/Application Support/typst/packages'
      if not project.joinpath(s.get('entrypoint','main.typ')).is_file(): raise RuntimeError('PDE main.typ missing')
@@ -43,7 +43,7 @@
      # Validate the actual document before reserving its stable port or changing launchd/Serve.
      fd,out=tempfile.mkstemp(suffix='.pdf',dir=RUNTIME); os.close(fd); preflight=pathlib.Path(out)
 -    result=run(['/Users/taeyoung/Developer/tinymist/target/release/tinymist','compile','main.typ',str(preflight),'--root','.','--font-path','fonts','--package-path',str(HOME/'Library/Application Support/typst/packages')],timeout=120,cwd=PROJECT)
-+    result=run([s.get('enginePath','/Users/taeyoung/Developer/tinymist/target/release/tinymist'),'compile',s.get('entrypoint','main.typ'),str(preflight),'--root','.','--font-path','fonts','--package-path',str(HOME/'Library/Application Support/typst/packages')],timeout=120,cwd=PROJECT)
++    result=run([s.get('enginePath',str(HOME/'Applications/tinymist-flow.app/Contents/MacOS/flow-engine')),'compile',s.get('entrypoint','main.typ'),str(preflight),'--root','.','--font-path','fonts','--package-path',str(HOME/'Library/Application Support/typst/packages')],timeout=120,cwd=PROJECT)
      valid=bool(result and result.returncode==0 and preflight.exists() and preflight.stat().st_size>0)
      preflight.unlink(missing_ok=True)
      if not valid: raise RuntimeError('PDE compile preflight failed; inspect compiler output before installation')
