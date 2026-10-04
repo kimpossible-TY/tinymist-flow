@@ -174,6 +174,10 @@ pub(crate) fn resolve_change(
             }
         }
     }
+    log::debug!(
+        "Preview edit navigation fell back to page {first} ({} changed pages)",
+        changed.len()
+    );
     Some((first, 0.0, 0.0))
 }
 

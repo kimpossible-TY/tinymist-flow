@@ -1,5 +1,11 @@
 # Last edited location restoration — 2026-10-02
 
+## Change navigation regression — 2026-10-04
+
+- The user reports the change button returning to the document's beginning across edits. The installed 0.1.4 engine reproduced two independent cases on an isolated 130-page fixture: changing a page-120 heading and replacing its include with a new file both emitted page 1 (the outline), rather than page 120.
+- Edited-source mapping now uses bounded source ranges and newly introduced dependencies, traversing glyphs, graphics, and tagged body elements. It prefers actual elements over copied headers, then unlinked content over internal-link copies, retaining all ranks and candidates from all edited files. Generic editor source navigation is unchanged.
+- Three scoped Rust tests passed: insertion/deletion/Unicode ranges including math identifiers, translated nested link boundaries, and external-link handling. Formatting, patch whitespace, and strict OpenSpec validation passed. Final-engine protocol/browser validation and installed delivery are pending; existing task 10.6 remains a separate physical iPhone selection-handle check.
+
 ## Implementation
 
 - Clean source commit: `e298657d41b45d2bb1193b64161d4551ae808ea2`, on `feat/persist-preview-location`.

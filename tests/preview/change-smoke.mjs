@@ -113,6 +113,22 @@ function assertResume(client, page = 120) {
   );
 }
 
+async function assertBodyEdit(clients, text, label) {
+  for (const client of clients) client.messages.length = 0;
+  await writeFile(passage, text);
+  for (const client of clients) {
+    await until(() => lastHint(client, "change"), label);
+    const [page, x, y] = lastHint(client, "change").payload.toString().split(" ").map(Number);
+    assert.equal(page, 120, label);
+    assert.ok(x > 0 || y > 0, `${label}: must resolve source coordinates, not page fallback`);
+    const hint = client.messages.indexOf(lastHint(client, "change"));
+    await until(
+      () => client.messages.slice(hint + 1).some((x) => x.type === "diff-v1"),
+      `${label} delta`,
+    );
+  }
+}
+
 try {
   await start();
   const light = await connect("light");
@@ -184,7 +200,10 @@ try {
   );
   const latestRevision = resumedDark.messages.indexOf(lastHint(resumedDark, "focus-revision"));
   await until(
-    () => resumedDark.messages.slice(latestRevision + 1).some((x) => x.type === "new" || x.type === "diff-v1"),
+    () =>
+      resumedDark.messages
+        .slice(latestRevision + 1)
+        .some((x) => x.type === "new" || x.type === "diff-v1"),
     "offline edit document follows its revision",
   );
   if (lastHint(resumedDark, "change")) {
@@ -218,15 +237,124 @@ try {
     "another entry must not reuse this project's edit",
   );
   await stop();
+  // An edited heading also changes its linked copy in the outline. The body
+  // occurrence, rather than the first changed page, is the navigation target.
+  const outlined = resolve(temp, "outlined.typ");
+  await writeFile(
+    outlined,
+    (await readFile(input, "utf8"))
+      .replace("= Last-edit restoration", "#outline(title: none)")
+      .replace("[= Reading page #number]", "[Reading page #number]"),
+  );
+  await writeFile(passage, "= Original distant heading\n");
+  const replacement = resolve(temp, "replacement.typ");
+  await writeFile(replacement, "= Newly included distant heading\n");
+  await start(outlined);
+  const includedLight = await connect("light");
+  const includedDark = await connect("dark");
+  await until(async () => (await record())?.variants.dark, "include baselines");
+  await delay(500);
+  const outlinedSource = await readFile(outlined, "utf8");
+  await writeFile(
+    outlined,
+    outlinedSource.replace('include "passage.typ"', 'include "replacement.typ"'),
+  );
+  for (const client of [includedLight, includedDark]) {
+    await until(() => lastHint(client, "change"), "new include edit");
+    assert.equal(
+      Number(lastHint(client, "change").payload.toString().split(" ")[0]),
+      120,
+      "new dependencies must map their body text rather than the changed outline",
+    );
+  }
+  await stop();
+  await writeFile(outlined, outlinedSource);
+  await start(outlined);
+  const outlinedLight = await connect("light");
+  const outlinedDark = await connect("dark");
+  await until(async () => (await record())?.variants.dark, "outlined baselines");
+  await delay(500);
+  await writeFile(passage, "= Updated distant heading\n");
+  for (const client of [outlinedLight, outlinedDark]) {
+    await until(() => lastHint(client, "change"), "outlined heading edit");
+    assert.equal(
+      Number(lastHint(client, "change").payload.toString().split(" ")[0]),
+      120,
+      "heading edits must target the body, not the linked outline copy",
+    );
+    const hint = client.messages.indexOf(lastHint(client, "change"));
+    await until(
+      () => client.messages.slice(hint + 1).some((x) => x.type === "diff-v1"),
+      "outlined edit delta",
+    );
+  }
+  assertResume(await connect("light"));
+  assertResume(await connect("dark"));
+  const outlinedClients = [outlinedLight, outlinedDark];
+  let body =
+    "= Updated distant heading\n\nOriginal body text.\n\n$alpha$\n\n#figure(rect(width: 20pt, height: 10pt), caption: [Example])\n";
+  await assertBodyEdit(outlinedClients, body, "body fixture setup");
+  body = body.replace("Original body", "Updated body");
+  await assertBodyEdit(outlinedClients, body, "ordinary paragraph edit");
+  body = body.replace("$alpha$", "$beta$");
+  await assertBodyEdit(outlinedClients, body, "math identifier edit");
+  body = body.replace("width: 20pt", "width: 30pt");
+  await assertBodyEdit(outlinedClients, body, "figure argument edit");
+  await stop();
+  const headered = resolve(temp, "headered.typ");
+  await writeFile(
+    headered,
+    outlinedSource.replace(
+      "#outline(title: none)",
+      "#set page(header: context { query(heading).first().body })\n#outline(title: none)",
+    ),
+  );
+  await writeFile(passage, "= Original repeated heading\n");
+  await start(headered);
+  const headeredLight = await connect("light");
+  const headeredDark = await connect("dark");
+  await until(async () => (await record())?.variants.dark, "header baselines");
+  await delay(500);
+  await assertBodyEdit(
+    [headeredLight, headeredDark],
+    "= Updated repeated heading\n",
+    "heading copied into every running header",
+  );
+  await stop();
+  const linked = resolve(temp, "linked.typ");
+  await copyFile(input, linked);
+  await writeFile(
+    passage,
+    "#link(<body-target>)[Original linked text]\n\nDestination <body-target>\n",
+  );
+  await start(linked);
+  const linkedLight = await connect("light");
+  const linkedDark = await connect("dark");
+  await until(async () => (await record())?.variants.dark, "linked baselines");
+  await delay(500);
+  await writeFile(
+    passage,
+    "#link(<body-target>)[Updated linked text]\n\nDestination <body-target>\n",
+  );
+  for (const client of [linkedLight, linkedDark]) {
+    await until(() => lastHint(client, "change"), "link-only edit");
+    assert.equal(
+      Number(lastHint(client, "change").payload.toString().split(" ")[0]),
+      120,
+      "authored internal-link text remains a valid navigation target",
+    );
+  }
+  await stop();
   console.log(
-    "PASS: initial baseline, ordered live edits in both themes, refresh/new viewer, disconnected edits, restart, stale output, and project isolation",
+    "PASS: initial baseline, ordered live edits in both themes, refresh/new viewer, disconnected edits, restart, stale output, project isolation, new includes, outlined/repeated headings, paragraph/math/figure edits, and authored internal links",
   );
   if (keep) {
-    await start();
+    await writeFile(passage, "= Original distant heading\n");
+    await start(outlined);
     await connect("light");
     await connect("dark");
     await delay(500);
-    await writeFile(passage, "Browser restoration check on page 120.\n");
+    await writeFile(passage, "= Browser heading check on page 120\n");
     await until(async () => {
       const saved = await record();
       return (

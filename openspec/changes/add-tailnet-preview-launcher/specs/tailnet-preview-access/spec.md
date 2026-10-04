@@ -78,6 +78,17 @@ On a successful incremental compilation that changes paged output, document prev
 - **WHEN** the user is actively scrolling as a changed page arrives
 - **THEN** the scroll position remains under the user's control and a change navigation button appears
 
+#### Scenario: Edit a heading also displayed in the outline
+- **WHEN** editing a distant heading changes both its linked outline entry and its body text
+- **THEN** automatic navigation and the deferred change button prefer the body occurrence on a changed page
+- **AND** new viewers restore that same persisted body location
+- **AND** source text rendered only inside internal links remains eligible for navigation
+
+#### Scenario: Edit code or introduce a source dependency
+- **WHEN** an edit changes an equation identifier, a figure argument, or an include introducing a new source file
+- **THEN** source-bearing glyphs, graphics, or tagged body elements are eligible navigation targets on changed pages
+- **AND** unchanged pages or copied running headers do not take priority over a matching body element
+
 ### Requirement: Restore the last visual edit on a new preview connection
 Configured standalone paged preview SHALL persist the last visual edit per project and document variant independently of connected viewers and explicit assistant selections. A new or refreshed viewer SHALL restore the stored location after its matching full document renders. Managed Flow profiles SHALL enable this behavior without changing registered URLs.
 
