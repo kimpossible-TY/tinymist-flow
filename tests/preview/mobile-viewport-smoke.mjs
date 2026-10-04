@@ -161,6 +161,12 @@ try {
     "document.querySelector('.typst-page-inner').getBoundingClientRect().width > 580",
   );
   await settle();
+  await evaluate(`(() => {
+    const s = document.getElementById('typst-container-main');
+    const r = document.querySelector('.typst-page-inner[data-page-number="9"]').getBoundingClientRect();
+    s.scrollTop += r.top - s.getBoundingClientRect().top + r.height * 0.25;
+  })()`);
+  await settle();
   const zoomed = await metrics();
   await browser("set", "viewport", "852", "393");
   await browser(
@@ -171,7 +177,24 @@ try {
   await settle();
   const rotatedZoom = await metrics();
   assert.equal(rotatedZoom.scale, 1.5);
-  assert.ok(Math.abs(rotatedZoom.pageFraction - zoomed.pageFraction) < 0.015);
+  assert.ok(
+    Math.abs(rotatedZoom.pageFraction - zoomed.pageFraction) < 0.015,
+    JSON.stringify({ zoomed, rotatedZoom }),
+  );
+  if (process.env.VIEWPORT_SCREENSHOT) {
+    await evaluate(
+      `(() => { const d = document.getElementById('typst-container').documents[0]; d.impl.currentScaleRatio = 1; d.addViewportChange(); })()`,
+    );
+    await browser(
+      "wait",
+      "--fn",
+      "Math.abs(document.querySelector('.typst-page-inner').getBoundingClientRect().width - 852) < 2",
+    );
+    await settle();
+    await evaluate(`document.getElementById('typst-container-main').scrollTop = 0`);
+    await settle();
+    await browser("screenshot", process.env.VIEWPORT_SCREENSHOT);
+  }
   console.log(JSON.stringify({ baseline, rotations: results, dark, zoomed, rotatedZoom }, null, 2));
 } finally {
   await browser("close").catch(() => {});

@@ -86,7 +86,7 @@
 
 - [x] 13.1 Enable edge-to-edge document layout and dynamic viewport height, retaining safe controls and native zoom.
 - [x] 13.2 Observe settled scrollport sizes without replacing existing resize anchors or scale; test feedback placement and layout contracts.
-- [ ] 13.3 Build the external engine and verify rotation, height changes, theme switches, and reading position on an isolated browser fixture.
+- [x] 13.3 Build the external engine and verify rotation, height changes, theme switches, and reading position on an isolated browser fixture.
 - [ ] 13.4 Package with the Flow-only app tooling, retain recovery, and verify the updated PDE endpoint or report OS consent blockers.
 - [ ] 13.5 Confirm both landscape orientations and portrait return on the user's physical iPhone 15.
 
