@@ -360,6 +360,14 @@ so the user was asked to handle that existing macOS prompt. No consent database
 or security setting was changed. A confirmed-release tag must wait for successful
 local and Tailscale document-frame verification after consent.
 
+On 2026-10-04, the same installed engine returned HTTP 200 for the frontend,
+but no document frame arrived during the follow-up check. A new process sample
+showed compilation blocked in source-file `open`, and TCC logs still recorded
+Documents-folder prompts for the changed code requirement. HTTP availability
+therefore did not establish document access or successful preview delivery.
+The follow-up receiver was stopped; no password was used and no permission or
+security setting was changed. The release remains untagged pending live delivery.
+
 The original 183-second event has not been retrospectively decomposed. Compile
 worker queue timing starts at dispatch; it excludes the time a newer revision
 remains pending behind an already-running compilation. Stage timings are wall
