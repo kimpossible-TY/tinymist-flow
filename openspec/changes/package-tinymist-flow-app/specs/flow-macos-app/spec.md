@@ -1,5 +1,14 @@
 ## ADDED Requirements
 
+### Requirement: Product repository identity
+The development repository SHALL be named tinymist-flow to match the product. Current documentation and local remote URLs SHALL use this name. The earlier independent repository SHALL be retained as tinymist-flow-archive.
+
+#### Scenario: Align repository and product names
+- **WHEN** the development repository is renamed to tinymist-flow
+- **THEN** its existing history and upstream fork relationship are preserved
+- **AND** the earlier independent repository remains accessible as tinymist-flow-archive
+- **AND** README generation and development instructions use the current repository name
+
 ### Requirement: Branded installed app
 The system SHALL install a macOS app named tinymist-flow with its own bundle identifier, icon, bundled engine, and release manifest.
 

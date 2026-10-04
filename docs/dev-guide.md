@@ -35,8 +35,8 @@ You don't have to configure anything to start developing tinymist. However, here
 To build tinymist LSP:
 
 ```bash
-git clone https://github.com/kimpossible-TY/typst-relay.git
-cd typst-relay
+git clone https://github.com/kimpossible-TY/tinymist-flow.git
+cd tinymist-flow
 # Debug
 cargo build
 # Release

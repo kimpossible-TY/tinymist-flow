@@ -10,6 +10,7 @@ The personal fork now owns mobile preview, editing performance, and Codex contex
 - Add verified local update and rollback commands, release manifests, and installed-version tags.
 - Import existing Tail Hosting configuration and keep HTTPS ingress owned by Tail Hosting.
 - Document personal-fork workflow, upstream maintenance, deployment, and recovery.
+- Align the development repository name and documentation with tinymist-flow, retaining the earlier independent repository as tinymist-flow-archive.
 
 ## Capabilities
 

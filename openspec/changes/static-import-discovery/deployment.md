@@ -2,7 +2,7 @@
 
 Date: 2026-09-19 (Asia/Seoul).
 
-Historical deployment record. Since 2026-09-24, development uses `kimpossible-TY/typst-relay` on `main`; remote names and active settings below describe the original deployment.
+Historical deployment record. Current development uses `kimpossible-TY/tinymist-flow` on `main`, renamed from `typst-relay` on 2026-10-04. The former independent repository is now `tinymist-flow-archive`; remote names and active settings below describe the original deployment.
 
 ## Source preservation
 
