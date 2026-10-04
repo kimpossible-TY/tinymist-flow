@@ -64,7 +64,8 @@ const settle = () =>
     "--fn",
     `(() => {
   const d = document.getElementById('typst-container')?.documents?.[0]?.impl;
-  return !!d && !d.isRendering && !d.patchQueue.length && document.querySelectorAll('.typst-page-inner').length === 20;
+  return !!d && !d.isRendering && !d.patchQueue.length && d.vpTimeout === undefined &&
+    !d.svgResizeAnchor && document.querySelectorAll('.typst-page-inner').length === 20;
 })()`,
   );
 const metrics = () =>
@@ -90,6 +91,11 @@ try {
   await browser("open", `http://${address}`);
   await browser("snapshot", "-i");
   await browser("set", "viewport", "393", "852");
+  await browser(
+    "wait",
+    "--fn",
+    "Math.abs(document.querySelector('.typst-page-inner')?.getBoundingClientRect().width - 393) < 2",
+  );
   await settle();
   await evaluate(`(() => {
     const s = document.getElementById('typst-container-main');
@@ -98,6 +104,7 @@ try {
   })()`);
   await settle();
   const baseline = await metrics();
+  assert.ok(Math.abs(baseline.pageFraction - 0.25) < 0.015, JSON.stringify(baseline));
   for (const [width, height] of [
     [852, 393],
     [852, 300],
