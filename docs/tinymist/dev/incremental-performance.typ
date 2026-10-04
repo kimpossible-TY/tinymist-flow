@@ -351,22 +351,20 @@ and the selected profile stayed unchanged. The LaunchAgent now records
 `ProcessType=Interactive`. Local and remote VS Code settings already select the
 installed engine path; no separate running LSP process was found.
 
-Live document delivery is pending macOS Documents consent. The first HTTP
-probe received connection refused. A process sample showed the new engine
-blocked in font-directory `open`; TCC logs explicitly reported a changed code
-requirement and `AUTHREQ_PROMPTING` for `SystemPolicyDocumentsFolder`.
-The computer-use tool refused access to UserNotificationCenter for safety,
-so the user was asked to handle that existing macOS prompt. No consent database
-or security setting was changed. A confirmed-release tag must wait for successful
-local and Tailscale document-frame verification after consent.
+After the user completed macOS Documents consent on 2026-10-04, live delivery
+passed for both `http://127.0.0.1:23625/` and the configured Tailscale HTTPS
+origin. Both frontends returned HTTP 200. Each origin delivered nonempty full
+document frames on both `/_theme/light` and `/_theme/dark`, advertising revisions
+1 and 2 respectively. Each payload exceeded 17 MB, and the palette payloads
+differed as expected. The receiver sent only `current`, preserving the user's
+source selection. This verifies document transport, not painting on the actual
+iPhone screen or a recompilation speedup.
 
-On 2026-10-04, the same installed engine returned HTTP 200 for the frontend,
-but no document frame arrived during the follow-up check. A new process sample
-showed compilation blocked in source-file `open`, and TCC logs still recorded
-Documents-folder prompts for the changed code requirement. HTTP availability
-therefore did not establish document access or successful preview delivery.
-The follow-up receiver was stopped; no password was used and no permission or
-security setting was changed. The release remains untagged pending live delivery.
+The installed engine's source revision and SHA-256 still match the validated
+clean build above. Ewald remains stopped. The confirmed release is tagged
+`flow-v0.1.4` at engine source commit `b9d56e3b`; subsequent commits only update
+validation tooling and documentation. Evidence is saved in
+`.local/performance-20261003/deployed-document-delivery-confirmed.json`.
 
 The original 183-second event has not been retrospectively decomposed. Compile
 worker queue timing starts at dispatch; it excludes the time a newer revision

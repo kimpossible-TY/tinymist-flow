@@ -8,4 +8,4 @@
 - [x] Run formatting, affected tests, lint and feature/e2e checks.
 - [x] Compare baseline and candidate with repeated edits on an isolated document snapshot.
 - [x] Document measured results and remaining limits in Typst source documentation.
-- [ ] Package, validate and apply the reviewed candidate once checks pass.
+- [x] Package, validate and apply the reviewed candidate once checks pass.
