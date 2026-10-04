@@ -10,6 +10,7 @@ Non-goals: renaming upstream crate/protocol identifiers, a new editor, or an aut
 ## Decisions
 
 - Keep one repository. Add apps/macos and assets/branding. Preserve upstream license and engine interfaces.
+- Name the development fork kimpossible-TY/tinymist-flow to match the product. Retain the earlier independent repository as kimpossible-TY/tinymist-flow-archive. Update local origin and flow-archive URLs and current documentation; keep dated historical records intact. Use docs/tinymist/tinymist-flow.typ as the generated README source.
 - Compile one Swift executable for GUI and service control. The LaunchAgent calls the app with --serve and a profile ID; it execs the bundled engine so launchd and focus-record PIDs agree. Associate the job with the app bundle identifier.
 - Store validated profiles and focus records in Application Support/tinymist-flow, logs in Library/Logs/tinymist-flow. Profiles carry project, entry, fonts, packages, port, and optional public URL. Always bind the backend to loopback.
 - Keep Tailscale routes in Tail Hosting. An opt-in adapter imports profiles and delegates lifecycle commands to the installed app. It retains existing labels and ports during migration.
