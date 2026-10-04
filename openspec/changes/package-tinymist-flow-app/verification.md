@@ -26,3 +26,20 @@ Unattended login after a real macOS login cycle and iPhone behavior after this p
 The development fork was renamed from `typst-relay` to `tinymist-flow`, preserving GitHub repository ID `1376877083` and its `Myriad-Dreamin/tinymist` parent. The earlier independent repository became `tinymist-flow-archive`, preserving ID `1376906710`. The repository description, local remote URLs, current documentation, and README source now use the product name. `git ls-remote` confirmed access to both repositories and their original branch heads.
 
 The local typlite build, JavaScript syntax check, README regeneration, OpenSpec strict validation, and diff whitespace check passed. Both Typst sources compiled to PDF; the README also compiled to HTML, where the current repository, issues, and historical repository links were verified. The README template still reports the existing unavailable `Source Han Serif SC` and `BlexMono Nerd Font Mono` fonts; HTML export also reports its experimental-feature warning.
+
+## Flow-only source ownership — 2026-10-04
+
+Commit `9dfeb20f0193b0ace1e1be5ac082cc0f20dbfe9c` removes 3,033 unrelated tracked files and retains a 32-file app project. Swift app sources, branding, the Tail Hosting adapter, packaging, app tests, standalone documentation, Flow OpenSpec artifacts, workflow skills, and Apache License 2.0 remain. Rust engine crates, editor integrations, preview frontend sources, engine fixtures, dependency workspaces, and upstream release/CI files are no longer maintained in this tree. Prior sources remain in Git history. Previously generated local engine and editor outputs were preserved under `.local/retired-engine-artifacts/20261004-201615/`.
+
+Packaging consumes an external executable via `--engine`, `FLOW_ENGINE_PATH`, or the current installed app. It probes required preview CLI support and completes and verifies a staged bundle before replacing its build output. The release manifest records the external engine version and input SHA-256 separately from the Flow source revision and bundled engine SHA-256. Native runtime preview arguments and focus/change/origin environment variables are preserved. The repository description now identifies Flow as a native macOS app.
+
+Verification passed both in the development tree and a clean shallow checkout of the app-only commit:
+
+- Fourteen tests passed, including fresh Swift compilation with warnings treated as errors, profile validation, missing/incompatible engine rejection, failed-build preservation, update recovery, real bundle signing, temporary installation, and HTTP/WebSocket preview delivery.
+- Real preview checks confirmed system-theme support and distinct compiled light/dark documents through the configured HTTPS origin.
+- The external engine was supplied from `~/Applications/tinymist-flow.app/Contents/MacOS/flow-engine`; its input hash remained unchanged. The fresh checkout contained no engine workspace, Cargo manifest, or target directory and stayed clean after the checks.
+- The README and development guide were regenerated with an external typlite executable and passed `node scripts/link-docs.mjs --check`. JavaScript syntax and diff whitespace checks passed.
+- All three standalone Typst documents compiled to PDF without warnings, and OpenSpec strict validation passed.
+- The source commit was integrated into local main by fast-forward.
+
+This extraction does not install or restart the live app. Existing mobile selection, assistant focus, device theme, and change restoration features continue to depend on the compatible external engine. A replacement engine requires compatibility verification; the CLI probe alone cannot establish support for every environment contract. CI compiles current Swift sources and the documentation; real-engine integration remains opt-in through `FLOW_TEST_ENGINE`.
