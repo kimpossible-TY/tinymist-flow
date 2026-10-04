@@ -12,6 +12,15 @@
 - An initial start overlapped the installer completing and reached the moved old bundle. Stopped that process (PID 19148), confirmed its exit, and restarted only the previously running PDE profile after replacement completed. Updated PID 19361 is attributed to the installed app/engine path. Ewald remains stopped and selected; Tail Hosting configuration and registered URLs are unchanged.
 - At 13:10:17 KST, TCC logged a new Documents code-requirement mismatch and `AUTHREQ_PROMPTING` for the updated engine. System Settings showed Documents Folder on, but refreshing its existing permission opened an administrator authentication sheet. No credentials were entered. The user was asked to authenticate locally; do not bypass consent or cycle installed bundles. Actual production document delivery and final release tagging remain pending. Task 12.4 stays open.
 
+### Permission applied and production delivery confirmed — 2026-10-04
+
+- The user completed local authentication. System Settings then showed Documents Folder off; enabled it and selected Quit & Reopen. The resulting settings state confirms Documents Folder on. No credentials were entered by the agent, and the installed bundle was not rebuilt or replaced.
+- Restarted the PDE engine to discard the access-denied source snapshot from before permission application. Both light and dark full documents arrived locally and through the existing certificate-validated HTTPS URL.
+- The document had changed from 306 to 308 pages while the service was unavailable. Comparing the old fingerprints on restart recreated a page-2 fallback despite clearing its coordinates earlier. Backed up that known-invalid record to `.local/jump-fix-20261004/previous-change-record-after-consent.json` and reset its variants while the engine was stopped, establishing the current document as a fresh baseline without inventing an edit location.
+- Final PDE engine PID 22196 serves installed 0.1.5. The final verification received four nonempty `new` frames: local light 17,663,404 bytes, local dark 17,716,796 bytes, HTTPS light 17,663,604 bytes, and HTTPS dark 17,717,308 bytes. Every frame carried a valid compiler revision; the palettes differ; no obsolete `resume` hint was sent. Evidence: `.local/jump-fix-20261004/live-delivery-final.json` and `.log`.
+- Task 12.4 is complete. Ewald remains stopped; user document sources and the registered preview URLs were not changed. The next visual source edit supplies the corrected body position; readers should refresh once to clear any old client-side button target. The separate physical iPhone selection-handle task 10.6 remains pending.
+- Confirmed release tag `flow-v0.1.5` points to the exact clean engine source commit `84bf4fa34f373a338e22e1672ae5ccaea55c621c`. No remote push or main-branch merge was performed.
+
 ## Implementation
 
 - Clean source commit: `e298657d41b45d2bb1193b64161d4551ae808ea2`, on `feat/persist-preview-location`.
