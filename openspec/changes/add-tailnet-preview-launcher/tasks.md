@@ -76,10 +76,19 @@
 
 ## 12. Resolve edited body locations across source kinds
 
+
 - [x] 12.1 Reproduce page-120 heading and new-include edits incorrectly navigating to the page-1 outline on the installed engine.
 - [x] 12.2 Resolve edited spans/new dependencies across glyphs, graphics, and tagged body elements; rank body positions ahead of copied headers/outline links while preserving link-only candidates and ordinary editor navigation.
 - [x] 12.3 Validate edit ranges/nested links, both-theme paragraph/math/figure/include/heading edits and persisted restoration, and the deferred button in a browser.
 - [x] 12.4 Build a clean-source app, install it, and verify existing PDE document delivery; record any required Documents consent.
+
+## 13. Edge-to-edge mobile viewport
+
+- [x] 13.1 Enable edge-to-edge document layout and dynamic viewport height, retaining safe controls and native zoom.
+- [x] 13.2 Observe settled scrollport sizes without replacing existing resize anchors or scale; test feedback placement and layout contracts.
+- [ ] 13.3 Build the external engine and verify rotation, height changes, theme switches, and reading position on an isolated browser fixture.
+- [ ] 13.4 Package with the Flow-only app tooling, retain recovery, and verify the updated PDE endpoint or report OS consent blockers.
+- [ ] 13.5 Confirm both landscape orientations and portrait return on the user's physical iPhone 15.
 
 2026-09-29 regression follow-up: 32 frontend/DOM tests, both TypeScript checks, preview and release-engine builds, 8 app tests, generated-doc consistency, and strict OpenSpec validation passed. A clean-source 0.1.1 candidate is retained at `dist/mobile-selection/tinymist-flow.app`. Deployment first exposed an asynchronous stop/start race (the stopped job remained briefly visible), then an explicit TCC Documents request for the new engine: existing code requirement mismatch and AUTHREQ_PROMPTING. Do not bypass consent. Restore 0.1.0 while waiting for the user to approve a coordinated reinstall. Mobile gesture verification and final release tagging remain pending.
 

@@ -59,6 +59,7 @@
 #typst-container.mode-slide {
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   align-items: center;
   flex-direction: column;
@@ -69,6 +70,7 @@
   height: 100%;
   flex: 1;
   max-height: 100vh;
+  max-height: 100dvh;
 }
 
 #typst-container.mode-slide #typst-container-top {

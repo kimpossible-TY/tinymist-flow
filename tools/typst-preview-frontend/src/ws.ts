@@ -18,6 +18,7 @@ import { Subject, Subscription, buffer, debounceTime, auditTime, fromEvent, tap 
 import { handleHtmlPreviewFrame } from "./html-preview";
 import type { ReadingState } from "./document-theme";
 import { ChangeLocationQueue, parseChangeLocation, type ChangeLocation } from "./change-location";
+import { focusStatusPlacement } from "./mobile-viewport";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
 // for debug propose
@@ -67,16 +68,17 @@ export async function wsMain({
   const positionFocusStatus = () => {
     const viewport = window.visualViewport;
     if (!focusStatus || !viewport) return;
-    Object.assign(focusStatus.style, {
-      left: `${viewport.offsetLeft + viewport.width / 2}px`,
-      top: `${viewport.offsetTop + viewport.height - 12 / viewport.scale}px`,
-      right: "auto",
-      bottom: "auto",
-      margin: "0",
-      maxWidth: `${Math.max(1, viewport.width * viewport.scale - 24)}px`,
-      transform: `translate(-50%, -100%) scale(${1 / viewport.scale})`,
-      transformOrigin: "bottom center",
-    });
+    const style = getComputedStyle(document.documentElement);
+    const inset = (edge: string) =>
+      Number.parseFloat(style.getPropertyValue(`--preview-safe-${edge}`)) || 0;
+    Object.assign(
+      focusStatus.style,
+      focusStatusPlacement(viewport, {
+        left: inset("left"),
+        right: inset("right"),
+        bottom: inset("bottom"),
+      }),
+    );
   };
   const korean = navigator.language.startsWith("ko");
   const showFocusStatus = (ko: string, en: string) => {
@@ -213,8 +215,17 @@ export async function wsMain({
       focusStatus = undefined;
     });
 
-    // drag (panal resizing) -> rescaling
-    // window.onresize = () => svgDoc.rescale();
+    // Dynamic viewport units can settle after the window resize event on iOS.
+    // Observe the actual scrollport; the renderer retains its existing resize anchor
+    // and scale ratio. Do not resize the document to the pinch-zoomed visual viewport.
+    if (typeof ResizeObserver !== "undefined") {
+      const observer = new ResizeObserver(() => {
+        positionFocusStatus();
+        svgDoc.addViewportChange();
+      });
+      observer.observe(resizeTarget);
+      svgDoc.impl.disposeList.push(() => observer.disconnect());
+    }
     subsribes.push(fromEvent(window, "resize").subscribe(() => svgDoc.addViewportChange()));
     if (window.visualViewport) {
       for (const event of ["resize", "scroll"]) {

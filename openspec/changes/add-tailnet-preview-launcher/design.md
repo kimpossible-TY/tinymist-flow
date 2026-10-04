@@ -98,6 +98,10 @@ Tail Hosting supplies the output path and exposes a local `focus` command. It ad
 
 ## Native text selection
 
+### Mobile viewport geometry
+
+Use `viewport-fit=cover` for the document surface, not whole-page safe-area padding. Keep native zoom enabled and retain Typst page margins. Use `100dvh` after a `100vh` fallback for root/slide height and allow the flex scrollport to shrink. Observe actual scrollport dimensions with a disposable ResizeObserver, retaining the existing window/visual viewport listeners and renderer resize anchors. Do not set the document width to the pinch-zoomed visual viewport or reset its scale ratio. Existing theme/change controls retain safe-area positioning; explicit-selection feedback also accounts for safe insets when positioned inside a zoomed visual viewport. Regression checks cover rotation, viewport-height changes, desktop layout, feedback insets, and existing resize/selection/theme behavior. Physical iPhone validation remains separate from desktop emulation.
+
 ### Selection stability regression
 
 Pause queued document and viewport updates before mutating the renderer while a noncollapsed range belongs to the touch overlay. Resume ordered document updates and one current viewport refresh on selection collapse; collapsed carets must not freeze the overlay. Listen for selection changes with disposal cleanup. Selection remains limited to the populated pages; this fix does not promise cross-document range selection. Suppress automatic source taps for a preexisting range, long press, movement, cancellation or multitouch. Account for visual viewport offsets during native zoom and position feedback within its visible bounds. Keep desktop selection behavior unchanged. Unit tests exercise queue suspension/resumption and gesture classification; native handle and WebKit painting behavior require an iPhone retest.

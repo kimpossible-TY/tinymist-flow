@@ -1,5 +1,20 @@
 ## ADDED Requirements
 
+### Requirement: Mobile preview fills the available viewport
+Document preview SHALL opt into edge-to-edge mobile layout without adding safe-area padding around the document or changing authored page margins. It SHALL follow dynamic viewport height and settled scrollport size while preserving existing reading anchors, explicit zoom, native pinch zoom, and safe control/feedback positioning.
+
+#### Scenario: Rotate a mobile browser
+- **WHEN** a reader rotates between portrait and either landscape orientation
+- **THEN** the document surface uses the available screen width without browser-imposed safe-area gutters
+- **AND** rendering uses the settled scrollport size and retains the reader's document location and scale ratio
+- **AND** controls and feedback avoid the notch and home indicator
+
+#### Scenario: Browser chrome changes height or the reader pinches
+- **WHEN** mobile browser chrome changes the available height
+- **THEN** the scrollport follows dynamic viewport height
+- **WHEN** the reader pinches to zoom
+- **THEN** the document is not forcibly fitted to the smaller visual viewport or reset to its default zoom
+
 ### Requirement: A preview can listen through the host's MagicDNS name
 The repository SHALL provide a launcher that starts the Tinymist preview data plane through one exact MagicDNS hostname and a stable port, without changing Tinymist's default loopback behavior.
 

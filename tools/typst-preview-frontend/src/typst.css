@@ -9,8 +9,15 @@ body {
 html,
 body {
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   box-sizing: border-box;
+}
+
+:root {
+  --preview-safe-left: env(safe-area-inset-left, 0px);
+  --preview-safe-right: env(safe-area-inset-right, 0px);
+  --preview-safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .hidden {
@@ -52,6 +59,8 @@ body {
 
 #typst-container-main {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   overflow: auto;
   position: relative;
 }
@@ -80,11 +89,11 @@ body {
   box-sizing: border-box;
   position: fixed;
   bottom: max(10px, env(safe-area-inset-bottom));
-  left: 12px;
-  right: 12px;
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
   z-index: 20;
   width: fit-content;
-  max-width: calc(100vw - 48px);
+  max-width: calc(100% - max(12px, env(safe-area-inset-left)) - max(12px, env(safe-area-inset-right)));
   margin: 0 auto;
   border-radius: 12px;
   padding: 7px 12px;
