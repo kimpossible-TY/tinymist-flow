@@ -120,7 +120,7 @@ The same frontend binary now serves the production HTTPS port 23625. TypeScript/
 ## 16. Install selected-text actions
 
 - [x] 16.1 Back up and patch the canonical and installed text-utils helpers to support singleton content; compile text, math and mixed ranges against the real package.
-- [ ] 16.2 Build a clean-commit native engine, package it with the clean Flow-only app tooling and validate its signature and external-engine provenance.
+- [x] 16.2 Build a clean-commit native engine, package it with the clean Flow-only app tooling and validate its signature and external-engine provenance.
 - [ ] 16.3 Install with a recovery bundle, preserve each profile's running state and verify the existing PDE HTTPS document and selected-text toolbar.
 
 Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser emulation and transport verification.
