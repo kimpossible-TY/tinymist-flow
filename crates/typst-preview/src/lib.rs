@@ -197,7 +197,7 @@ impl Previewer {
                     conn,
                     svg.1,
                     h.webview_tx.clone(),
-                    h.webview_tx.subscribe(),
+                    (h.webview_tx.subscribe(), h.status_rx.clone()),
                     h.editor_tx.clone(),
                     h.renderer_tx.clone(),
                     h.focus_store
@@ -292,6 +292,10 @@ pub struct PreviewBuilder {
     renderer_mailbox: BroadcastChannel<RenderActorRequest>,
     editor_conn: MpScChannel<EditorActorRequest>,
     webview_conn: BroadcastChannel<WebviewActorRequest>,
+    compile_status: (
+        tokio::sync::watch::Sender<Option<CompileStatus>>,
+        tokio::sync::watch::Receiver<Option<CompileStatus>>,
+    ),
     doc_sender: Arc<parking_lot::RwLock<Option<Arc<dyn CompileView>>>>,
 
     compile_watcher: OnceLock<Arc<CompileWatcher>>,
@@ -308,6 +312,7 @@ impl PreviewBuilder {
             renderer_mailbox: broadcast::channel(1024),
             editor_conn: mpsc::unbounded_channel(),
             webview_conn: broadcast::channel(32),
+            compile_status: tokio::sync::watch::channel(None),
             doc_sender: Arc::new(parking_lot::RwLock::new(None)),
             compile_watcher: OnceLock::new(),
         }
@@ -364,6 +369,7 @@ impl PreviewBuilder {
                 doc_sender: self.doc_sender.clone(),
                 editor_tx: self.editor_conn.0.clone(),
                 render_tx: self.renderer_mailbox.0.clone(),
+                status_tx: self.compile_status.0.clone(),
                 change_tracker: self.change_tracker.clone(),
             })
         })
@@ -379,6 +385,7 @@ impl PreviewBuilder {
             renderer_mailbox,
             editor_conn: (editor_tx, editor_rx),
             webview_conn: (webview_tx, _),
+            compile_status: (_, status_rx),
             doc_sender,
             ..
         } = self;
@@ -412,6 +419,7 @@ impl PreviewBuilder {
             renderer_tx: renderer_mailbox.0.clone(),
             enable_partial_rendering: config.enable_partial_rendering,
             doc_sender,
+            status_rx,
         };
 
         Previewer {
@@ -464,6 +472,7 @@ mod tests {
     struct TestSocket {
         incoming:
             futures::channel::mpsc::UnboundedReceiver<Result<WsMessage, reflexo_typst::Error>>,
+        outgoing: Option<mpsc::UnboundedSender<WsMessage>>,
     }
 
     impl Stream for TestSocket {
@@ -481,7 +490,10 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn start_send(self: Pin<&mut Self>, _: WsMessage) -> Result<(), Self::Error> {
+        fn start_send(self: Pin<&mut Self>, message: WsMessage) -> Result<(), Self::Error> {
+            if let Some(outgoing) = &self.outgoing {
+                let _ = outgoing.send(message);
+            }
             Ok(())
         }
 
@@ -515,6 +527,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compiler_status_reaches_late_viewers_and_remains_pipeline_local() {
+        let builder = super::PreviewBuilder::new(super::PreviewConfig::default());
+        let sibling = builder.sibling(super::PreviewConfig::default());
+        let watcher = builder.compile_watcher("status-test".into()).clone();
+        watcher.status(super::CompileStatus::CompileError);
+        assert!(sibling.compile_status.1.borrow().is_none());
+        let (control, _control_rx) = super::ControlPlaneTx::new(false);
+        let mut previewer = builder.build(control, Arc::new(TestEditor)).await;
+        let (streams_tx, streams_rx) = mpsc::unbounded_channel();
+        previewer.start_data_plane(streams_rx, |socket| socket);
+        let (incoming_tx, incoming) = futures::channel::mpsc::unbounded();
+        let (outgoing, mut messages) = mpsc::unbounded_channel();
+        streams_tx
+            .send(futures::future::ready(Ok(TestSocket {
+                incoming,
+                outgoing: Some(outgoing),
+            })))
+            .unwrap();
+        for expected in ["error", "compiling", "success"] {
+            if expected == "compiling" {
+                watcher.status(super::CompileStatus::Compiling);
+            } else if expected == "success" {
+                watcher.status(super::CompileStatus::CompileSuccess);
+            }
+            let message = tokio::time::timeout(std::time::Duration::from_secs(2), messages.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            let WsMessage::Binary(bytes) = message else {
+                panic!("expected a binary status")
+            };
+            assert_eq!(
+                bytes.as_ref(),
+                format!("compile-status,{expected}").as_bytes()
+            );
+        }
+        drop(incoming_tx);
+        previewer.stop().await;
+        previewer.join().await;
+    }
+
+    #[tokio::test]
     async fn demand_tracks_live_viewers_and_releases_renderers_on_disconnect() {
         let (demand_tx, mut demand_rx) = mpsc::unbounded_channel();
         let builder = super::PreviewBuilder::new(super::PreviewConfig::default())
@@ -545,14 +599,20 @@ mod tests {
             .unwrap();
         let (first, incoming) = futures::channel::mpsc::unbounded();
         streams_tx
-            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .send(futures::future::ready(Ok(TestSocket {
+                incoming,
+                outgoing: None,
+            })))
             .unwrap();
         assert!(demand_event(&mut demand_rx).await);
         renderer_count(&renderer, 2).await;
 
         let (second, incoming) = futures::channel::mpsc::unbounded();
         streams_tx
-            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .send(futures::future::ready(Ok(TestSocket {
+                incoming,
+                outgoing: None,
+            })))
             .unwrap();
         renderer_count(&renderer, 4).await;
         assert!(demand_rx.try_recv().is_err());
@@ -567,7 +627,10 @@ mod tests {
 
         let (reconnected, incoming) = futures::channel::mpsc::unbounded();
         streams_tx
-            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .send(futures::future::ready(Ok(TestSocket {
+                incoming,
+                outgoing: None,
+            })))
             .unwrap();
         assert!(demand_event(&mut demand_rx).await);
         reconnected
@@ -579,7 +642,10 @@ mod tests {
         // Service shutdown also releases demand for sockets that are still open.
         let (_last, incoming) = futures::channel::mpsc::unbounded();
         streams_tx
-            .send(futures::future::ready(Ok(TestSocket { incoming })))
+            .send(futures::future::ready(Ok(TestSocket {
+                incoming,
+                outgoing: None,
+            })))
             .unwrap();
         assert!(demand_event(&mut demand_rx).await);
         previewer.stop().await;
@@ -808,6 +874,7 @@ pub struct CompileWatcher {
     doc_sender: Arc<parking_lot::RwLock<Option<Arc<dyn CompileView>>>>,
     editor_tx: mpsc::UnboundedSender<EditorActorRequest>,
     render_tx: broadcast::Sender<RenderActorRequest>,
+    status_tx: tokio::sync::watch::Sender<Option<CompileStatus>>,
     change_tracker: Option<Arc<change::ChangeTracker>>,
 }
 
@@ -817,6 +884,7 @@ impl CompileWatcher {
     }
 
     pub fn status(&self, status: CompileStatus) {
+        self.status_tx.send_replace(Some(status));
         let _ = self
             .editor_tx
             .send(EditorActorRequest::CompileStatus(status));
@@ -850,14 +918,10 @@ impl CompileWatcher {
 
                 // todo: is it right that ignore zero broadcast receiver?
                 let _ = self.render_tx.send(RenderActorRequest::RenderIncremental);
-                let _ = self.editor_tx.send(EditorActorRequest::CompileStatus(
-                    CompileStatus::CompileSuccess,
-                ));
+                self.status(CompileStatus::CompileSuccess);
             }
             CompileStatus::Compiling | CompileStatus::CompileError => {
-                let _ = self
-                    .editor_tx
-                    .send(EditorActorRequest::CompileStatus(status));
+                self.status(status);
             }
         }
     }
@@ -876,6 +940,7 @@ struct DataPlane {
     invert_colors: String,
     renderer_tx: broadcast::Sender<RenderActorRequest>,
     doc_sender: Arc<parking_lot::RwLock<Option<Arc<dyn CompileView>>>>,
+    status_rx: tokio::sync::watch::Receiver<Option<CompileStatus>>,
 }
 
 /// The invert colors for the preview.

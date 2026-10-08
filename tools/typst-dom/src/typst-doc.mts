@@ -124,6 +124,10 @@ export class TypstDocumentContext<O = any> {
   private disposed = false;
   /// Called after the document DOM has settled for the queued updates.
   onDidRender?: () => void;
+  /// Called when queued rendering runs or is held by native touch selection.
+  onRenderActivity?: (activity: "rendering" | "selection-held") => void;
+  /// Called if processing or rendering queued changes fails.
+  onRenderError?: (error: unknown) => void;
   /// page to partial render
   partialRenderPage: number = 0;
   /// outline data
@@ -436,6 +440,7 @@ export class TypstDocumentContext<O = any> {
       if (hasTouchSelection(this.hookedElem)) {
         this.selectionHeld = true;
         this.isRendering = false;
+        if (this.patchQueue.length) this.onRenderActivity?.("selection-held");
         return;
       }
       this.cachedDOMState = this.retrieveDOMState();
@@ -447,6 +452,7 @@ export class TypstDocumentContext<O = any> {
       }
 
       try {
+        this.onRenderActivity?.("rendering");
         let t0 = performance.now();
 
         let needRerender = false;
@@ -474,6 +480,7 @@ export class TypstDocumentContext<O = any> {
       } catch (e) {
         console.error(e);
         this.isRendering = false;
+        this.onRenderError?.(e);
         this.postprocessChanges(false);
       }
     };

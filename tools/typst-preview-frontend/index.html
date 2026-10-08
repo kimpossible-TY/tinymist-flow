@@ -11,6 +11,52 @@
 
   <title>preview-arg:pageTitle:</title>
   <style id="preview-theme-styles"></style>
+  <!-- Available before the JavaScript bundle and WASM renderer are ready. -->
+  <style>
+    #typst-preview-status {
+      position: fixed;
+      top: calc(max(12px, env(safe-area-inset-top, 0px)) + 40px);
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      width: max-content;
+      max-width: calc(100vw - 24px);
+      box-sizing: border-box;
+      padding: 10px 14px;
+      border: 1px solid #8884;
+      border-radius: 18px;
+      background: #f4f6f8f5;
+      color: #17212f;
+      box-shadow: 0 2px 12px #0002;
+      font: 500 13px system-ui, sans-serif;
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    #typst-preview-status[hidden], .typst-preview-status-hint[hidden] { display: none; }
+    .typst-preview-status-ring {
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      box-sizing: border-box;
+      border: 2px solid #578cbd40;
+      border-top-color: #2876bd;
+      border-radius: 50%;
+      animation: typst-status-spin 1s linear infinite;
+    }
+    #typst-preview-status[data-busy="false"] .typst-preview-status-ring { animation: none; }
+    #typst-preview-status[data-phase$="error"] .typst-preview-status-ring { border-color: #d94a4a; }
+    .typst-preview-status-hint { display: block; margin-top: 4px; font-size: 12px; opacity: 0.8; }
+    :root[data-document-theme="dark"] #typst-preview-status { background: #222a36f5; color: #eef2f7; }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-document-theme]) #typst-preview-status { background: #222a36f5; color: #eef2f7; }
+    }
+    @media (prefers-reduced-motion: reduce) { .typst-preview-status-ring { animation: none; } }
+    @keyframes typst-status-spin { to { transform: rotate(360deg); } }
+  </style>
   <!-- before all of code to avoid rerender by style replacement -->
   <script>
     if (typeof acquireVsCodeApi !== "undefined") {
@@ -150,6 +196,15 @@
 </head>
 
 <body>
+  <div id="typst-preview-status" role="status" aria-live="polite" aria-atomic="true" data-phase="preparing" data-busy="true">
+    <span class="typst-preview-status-ring" aria-hidden="true"></span>
+    <span><span class="typst-preview-status-label">Preparing preview…</span><span class="typst-preview-status-hint" hidden></span></span>
+  </div>
+  <script>
+    if (navigator.language.startsWith("ko")) {
+      document.querySelector(".typst-preview-status-label").textContent = "미리보기 준비 중…";
+    }
+  </script>
   <!-- reserving 1px to hide height border, margin-top: -1px; -->
   <div id="typst-container">
     <div id="typst-container-top" style="width: 100%; z-index: 1">

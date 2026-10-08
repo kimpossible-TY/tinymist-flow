@@ -16,6 +16,8 @@ Stop disables the project's LaunchAgent until Start is used again. Closing or qu
 
 The status distinguishes a stopped process from a responding HTTP server. HTTP readiness does not prove successful compilation: inspect the preview and logs for compiler errors. After restarting, tap the document again before asking Codex about a selected passage.
 
+Opening a preview shows a small status ring while the browser prepares the renderer, connects to the server, waits for the document, compiles or draws its pages. The ring disappears once the document has rendered. Compiler and rendering failures show a static error; a dropped connection shows reconnection activity. If selection holds an update, the status asks you to release the selection. A long wait also suggests checking the server. These are activity states, not estimated percentages or proof of a macOS permission prompt.
+
 On touch devices, selecting text temporarily holds preview rendering so the visual page and native selection stay on the same revision. Dismiss the selection to apply pending edits and refresh the visible pages. Native copying covers the currently populated preview pages, not an arbitrary range across the whole document. A drag or long press does not automatically share a source location with Codex; use Save for Codex in the selection toolbar to save the exact text, or dismiss the selection and use a short tap to share a location.
 
 == Selected text actions

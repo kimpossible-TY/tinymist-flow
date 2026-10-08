@@ -61,6 +61,10 @@ describe("mobile selection render lifetime", () => {
     } as any);
     const process = vi.spyOn(ctx as any, "processQueue").mockReturnValue(true);
     const render = vi.fn();
+    const activity = vi.fn();
+    const complete = vi.fn();
+    ctx.onRenderActivity = activity;
+    ctx.onDidRender = complete;
     (ctx as any).r = { rescale: vi.fn(), rerender: render, postRender: vi.fn() };
     ctx.addChangement(["diff-v1", "first"]);
     ctx.addChangement(["diff-v1", "second"]);
@@ -69,6 +73,8 @@ describe("mobile selection render lifetime", () => {
     await frames.shift()!(0);
     expect(process).not.toHaveBeenCalled();
     expect(render).not.toHaveBeenCalled();
+    expect(activity).toHaveBeenCalledWith("selection-held");
+    expect(complete).not.toHaveBeenCalled();
     expect(ctx.patchQueue).toEqual([
       ["diff-v1", "first"],
       ["diff-v1", "second"],
@@ -84,7 +90,9 @@ describe("mobile selection render lifetime", () => {
       ["viewport-change", ""],
     ]);
     expect(render).toHaveBeenCalledOnce();
+    expect(activity).toHaveBeenLastCalledWith("rendering");
     await frames.shift()!(0);
+    expect(complete).toHaveBeenCalledOnce();
     ctx.dispose();
     expect(ownerDocument.removeEventListener).toHaveBeenCalledWith("selectionchange", onSelection);
     // A theme transition may dispose after a frame is queued but before it runs.
@@ -110,6 +118,40 @@ describe("mobile selection render lifetime", () => {
     await frames.shift()!(0);
     expect(render).not.toHaveBeenCalled();
     expect(ctx.isRendering).toBe(false);
+  });
+
+  it("reports renderer rejection without claiming a successful render", async () => {
+    const { root, selection } = fixture();
+    selection.isCollapsed = true;
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    vi.stubGlobal("document", { documentElement: {} });
+    vi.stubGlobal("getComputedStyle", () => ({ getPropertyValue: () => "white" }));
+    vi.spyOn(TypstDocumentContext.prototype as any, "installRescaleHandler").mockImplementation(
+      () => {},
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const ctx = new TypstDocumentContext({
+      hookedElem: root,
+      windowElem: {},
+      kModule: {},
+      retrieveDOMState: () => ({ width: 400, height: 800, boundingRect: { top: 0, left: 0 } }),
+    } as any);
+    vi.spyOn(ctx as any, "processQueue").mockReturnValue(true);
+    const failure = new Error("render failed");
+    (ctx as any).r = {
+      rescale: vi.fn(),
+      rerender: vi.fn().mockRejectedValue(failure),
+      postRender: vi.fn(),
+    };
+    ctx.onRenderError = vi.fn();
+    ctx.onDidRender = vi.fn();
+    ctx.addChangement(["new", "document"]);
+    await frames.shift()!(0);
+    expect(ctx.onRenderError).toHaveBeenCalledWith(failure);
+    expect(ctx.onDidRender).not.toHaveBeenCalled();
+    expect(ctx.isRendering).toBe(false);
+    ctx.dispose();
   });
 });
 

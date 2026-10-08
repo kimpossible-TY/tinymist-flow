@@ -20,6 +20,7 @@ import type { ReadingState } from "./document-theme";
 import { ChangeLocationQueue, parseChangeLocation, type ChangeLocation } from "./change-location";
 import { focusStatusPlacement } from "./mobile-viewport";
 import { SelectionActions } from "./selection-actions";
+import { PreviewActivity } from "./preview-activity";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
 // for debug propose
@@ -49,6 +50,8 @@ export async function wsMain({
   readingState,
 }: WsArgs) {
   if (!url) {
+    const status = document.getElementById("typst-preview-status");
+    if (status) status.hidden = true;
     const hookedElem = document.getElementById("typst-app");
     if (hookedElem) {
       hookedElem.innerHTML = "";
@@ -56,6 +59,11 @@ export async function wsMain({
     return () => {};
   }
   const windowElem = document.getElementById("typst-container")! as TypstDomWindowElement;
+  const activity = new PreviewActivity();
+  const updateActivity = (update: () => void) => {
+    update();
+    activity.refresh();
+  };
 
   let disposed = false;
   let $ws: WebSocketSubject<ArrayBuffer> | undefined = undefined;
@@ -240,6 +248,7 @@ export async function wsMain({
     }
     let restoreReadingState = readingState;
     svgDoc.impl.onDidRender = () => {
+      updateActivity(() => activity.state.didRender());
       // A viewport render must not adopt a hint before its document frame arrives.
       focusRevision =
         queuedFocusRevision === pendingFocusRevision ? queuedFocusRevision : undefined;
@@ -254,6 +263,9 @@ export async function wsMain({
         svgDoc.addViewportChange();
       }
     };
+    svgDoc.impl.onRenderActivity = (phase) =>
+      updateActivity(() => activity.state.renderActivity(phase));
+    svgDoc.impl.onRenderError = () => updateActivity(() => activity.state.renderError());
     svgDoc.impl.disposeList.push(() => {
       windowElem.onPreviewFocus = undefined;
       selectionActions?.dispose();
@@ -492,7 +504,7 @@ export async function wsMain({
     if (!windowElem.documents.includes(svgDoc)) windowElem.documents.push(svgDoc);
 
     // todo: reconnect setTimeout(() => setupSocket(svgDoc), 1000);
-    $ws = webSocket<ArrayBuffer>({
+    const socket = webSocket<ArrayBuffer>({
       url,
       binaryType: "arraybuffer",
       serializer: (t) => t,
@@ -500,6 +512,7 @@ export async function wsMain({
       openObserver: {
         next: (e) => {
           if (disposed) return;
+          updateActivity(() => activity.state.opened());
           const sock = e.target;
           console.log("WebSocket connection opened", sock);
           windowElem.typstWebsocket = sock as any;
@@ -516,6 +529,8 @@ export async function wsMain({
       },
       closeObserver: {
         next: (e) => {
+          if (disposed) return;
+          updateActivity(() => activity.state.disconnected());
           console.log("WebSocket connection closed", e);
           focusRevision = pendingFocusRevision = undefined;
           focusEnabled = false;
@@ -525,7 +540,7 @@ export async function wsMain({
               "연결 끊김 · 다시 연결한 뒤 탭해 주세요",
               "Disconnected · reconnect, then tap again",
             );
-          $ws?.unsubscribe();
+          socket.unsubscribe();
           if (!disposed) {
             reconnectTimer = setTimeout(() => {
               if (!disposed) setupSocket(svgDoc);
@@ -534,11 +549,13 @@ export async function wsMain({
         },
       },
     });
+    $ws = socket;
 
     const batchMessageChannel = new Subject<ArrayBuffer>();
 
     const dispose = () => {
       disposed = true;
+      activity.dispose();
       if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
       svgDoc.dispose();
       const index = windowElem.documents.indexOf(svgDoc);
@@ -556,7 +573,10 @@ export async function wsMain({
 
     $ws.subscribe({
       next: (data) => batchMessageChannel.next(data), // Called whenever there is a message from the server.
-      error: (err) => console.log("WebSocket Error: ", err), // Called if at any point WebSocket API signals some kind of error.
+      error: (err) => {
+        console.log("WebSocket Error: ", err);
+        if (!disposed) updateActivity(() => activity.state.disconnected());
+      },
       complete: () => console.log("complete"), // Called when connection is closed (for whatever reason).
     });
 
@@ -574,6 +594,7 @@ export async function wsMain({
     );
 
     function processMessage(data: ArrayBuffer) {
+      if (disposed || $ws !== socket) return;
       if (!(data instanceof ArrayBuffer)) {
         if (data === NOT_AVAILABLE) {
           return;
@@ -592,6 +613,10 @@ export async function wsMain({
         messageData.slice(message_idx + 1),
       ];
       console.log("recv", message[0], messageData.length);
+      if (message[0] === "compile-status") {
+        updateActivity(() => activity.state.compile(dec.decode(message[1] as Uint8Array)));
+        return;
+      }
       if (message[0] === "focus-enabled") {
         focusEnabled = true;
         selectionActions?.setEnabled(!!focusRevision);
@@ -805,6 +830,7 @@ export async function wsMain({
       }
 
       if (message[0] === "new" || message[0] === "diff-v1") {
+        updateActivity(() => activity.state.frame());
         queuedFocusRevision = pendingFocusRevision;
         queuedFocusDocument = pendingFocusDocument;
       }
@@ -814,26 +840,35 @@ export async function wsMain({
     return dispose;
   }
 
-  let plugin = createTypstRenderer();
-  await plugin.init({ getModule: () => renderModule });
-
-  return new Promise<() => void>((resolveDispose) =>
-    plugin.runWithSession((kModule) /* module kernel from wasm */ => {
-      return new Promise(async (kernelDispose) => {
-        console.log("plugin initialized, build info:", await rendererBuildInfo());
-
-        const wsDispose = setupSocket(createSvgDocument(kModule));
-
-        // todo: plugin init and setup socket at the same time
-        resolveDispose(() => {
-          // dispose ws first
-          wsDispose();
-          // dispose kernel then
-          kernelDispose(undefined);
-        });
-      });
-    }),
-  );
+  try {
+    const plugin = createTypstRenderer();
+    await plugin.init({ getModule: () => renderModule });
+    console.log("plugin initialized, build info:", await rendererBuildInfo());
+    updateActivity(() => activity.state.connecting());
+    return await new Promise<() => void>((resolveDispose, reject) => {
+      plugin
+        .runWithSession(
+          (kModule) =>
+            new Promise((kernelDispose) => {
+              try {
+                const wsDispose = setupSocket(createSvgDocument(kModule));
+                resolveDispose(() => {
+                  wsDispose();
+                  kernelDispose(undefined);
+                });
+              } catch (error) {
+                kernelDispose(undefined);
+                reject(error);
+              }
+            }),
+        )
+        .catch(reject);
+    });
+  } catch (error) {
+    console.error("Preview renderer failed", error);
+    updateActivity(() => activity.state.renderError());
+    return () => activity.dispose();
+  }
 }
 
 /** The strategy to set invert colors, see editors/vscode/package.json for enum descriptions */

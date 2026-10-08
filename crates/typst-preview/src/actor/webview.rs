@@ -9,7 +9,9 @@ use tokio::sync::{broadcast, mpsc};
 
 use super::{editor::EditorActorRequest, render::RenderActorRequest};
 use crate::focus::{FocusRequest, FocusStore};
-use crate::{ViewerWindowStateMessage, WsMessage, actor::editor::DocToSrcJumpResolveRequest};
+use crate::{
+    CompileStatus, ViewerWindowStateMessage, WsMessage, actor::editor::DocToSrcJumpResolveRequest,
+};
 
 type FocusConnection = (
     FocusStoreHandle,
@@ -52,6 +54,7 @@ pub struct WebviewActor<'a, C> {
     broadcast_sender: broadcast::Sender<WebviewActorRequest>,
     editor_sender: mpsc::UnboundedSender<EditorActorRequest>,
     render_sender: broadcast::Sender<RenderActorRequest>,
+    compile_status: tokio::sync::watch::Receiver<Option<CompileStatus>>,
     focus: Option<FocusConnection>,
     viewer_id: u64,
 }
@@ -77,11 +80,15 @@ where
         websocket_conn: std::pin::Pin<&'a mut C>,
         svg_receiver: mpsc::UnboundedReceiver<Vec<u8>>,
         broadcast_sender: broadcast::Sender<WebviewActorRequest>,
-        mailbox: broadcast::Receiver<WebviewActorRequest>,
+        mailbox: (
+            broadcast::Receiver<WebviewActorRequest>,
+            tokio::sync::watch::Receiver<Option<CompileStatus>>,
+        ),
         editor_sender: mpsc::UnboundedSender<EditorActorRequest>,
         render_sender: broadcast::Sender<RenderActorRequest>,
         focus: Option<FocusConnection>,
     ) -> Self {
+        let (mailbox, compile_status) = mailbox;
         Self {
             webview_websocket_conn: websocket_conn,
             svg_receiver,
@@ -89,6 +96,7 @@ where
             broadcast_sender,
             editor_sender,
             render_sender,
+            compile_status,
             focus,
             viewer_id: NEXT_VIEWER_ID.fetch_add(1, Ordering::Relaxed),
         }
@@ -170,9 +178,27 @@ where
             .log_error("SendPreviewHighlight");
     }
 
+    async fn send_compile_status(&mut self) {
+        let status = *self.compile_status.borrow_and_update();
+        let Some(status) = status else { return };
+        let status = match status {
+            CompileStatus::Compiling => "compiling",
+            CompileStatus::CompileSuccess => "success",
+            CompileStatus::CompileError => "error",
+        };
+        self.webview_websocket_conn
+            .send(WsMessage::Binary(format!("compile-status,{status}").into()))
+            .await
+            .log_error("SendPreviewCompileStatus");
+    }
+
     pub async fn run(mut self) {
+        self.send_compile_status().await;
         loop {
             tokio::select! {
+                Ok(()) = self.compile_status.changed() => {
+                    self.send_compile_status().await;
+                }
                 Ok(msg) = self.mailbox.recv() => {
                     log::trace!("WebviewActor: received message from mailbox: {msg:?}");
                     match msg {
