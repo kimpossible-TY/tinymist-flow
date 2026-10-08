@@ -12,3 +12,4 @@
 
 - [x] 3.1 Document activity in the Typst guide and regenerate preview assets; run scoped TypeScript, Rust and formatting checks.
 - [x] 3.2 Verify loading, successful render, live update, compiler error and reconnect in an isolated browser; record delivery limits.
+- [x] 3.3 Apply the user-authorized installed-app update and verify status transitions plus actual production document rendering.
