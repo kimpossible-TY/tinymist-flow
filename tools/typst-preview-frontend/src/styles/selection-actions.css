@@ -1,0 +1,85 @@
+.typst-review-host {
+  position: relative;
+}
+
+.typst-review-marks {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  user-select: none;
+}
+
+.typst-review-marks span {
+  position: absolute;
+  border-top: 2px solid #e43737;
+  transform: translateY(-50%);
+}
+
+.typst-selection-actions {
+  position: fixed;
+  left: 50%;
+  bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 110;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 6px;
+  border: 1px solid #8886;
+  border-radius: 14px;
+  background: #fff;
+  color: #222;
+  box-shadow: 0 4px 20px #0003;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.typst-selection-actions[hidden],
+.typst-selection-actions button[hidden] {
+  display: none;
+}
+
+.typst-selection-actions button {
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font:
+    500 13px system-ui,
+    sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.typst-selection-actions button:disabled {
+  opacity: 0.45;
+}
+.typst-selection-actions button:focus-visible {
+  outline: 2px solid #0673da;
+}
+.typst-selection-actions button:hover {
+  background: #8882;
+}
+.typst-selection-actions .typst-strike-action {
+  color: #d52d2d;
+  text-decoration: line-through;
+}
+
+:root[data-document-theme="dark"] .typst-selection-actions {
+  background: #282828;
+  color: #eee;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-document-theme]) .typst-selection-actions {
+    background: #282828;
+    color: #eee;
+  }
+}

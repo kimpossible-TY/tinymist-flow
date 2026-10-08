@@ -47,3 +47,9 @@ Persist the most recent visual edit per project and document variant on the serv
 ## Edge-to-edge mobile viewport
 
 Remove the browser's landscape safe-area gutters from the document surface, retain safe positioning of controls/feedback, and follow dynamic viewport height and settled scrollport dimensions without resetting zoom or reading position. Implement this as an external engine update in an isolated engine worktree; do not reintroduce engine sources into the Flow-only main checkout.
+
+## Actions on selected text
+
+Add a web toolbar for a native text range: save its exact text and endpoints in the existing Codex focus record, apply a real Typst highlight to safely mapped source text, and draw a temporary red strike through the selected range. Temporary marks use a separate browser overlay and never modify source or request compilation. Keep marks scoped to the document and invalidate their geometry when the marked page changes. Preserve native selection handles and copying.
+
+Prefer the document's callable `highlighted` helper when present, including text-only selections, to retain authored math backgrounds and theme colors. Support complete equations mixed with text through source syntax and rendered glyph coverage; reject partial formulas and reused source slices.

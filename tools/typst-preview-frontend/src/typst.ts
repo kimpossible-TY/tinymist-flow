@@ -234,6 +234,8 @@ function layoutTouchSelection(svg: SVGElement) {
     const fontSize = (Number.parseFloat(style.fontSize) * rect.height) / sourceHeight;
     const line = document.createElement("span");
     line.className = "typst-touch-selection-line";
+    const page = source.closest(".typst-page");
+    if (page) line.dataset.page = String(Number(page.getAttribute("data-page-number")) + 1);
     line.textContent = text;
     line.style.width = `${rect.width}px`;
     line.style.height = `${rect.height}px`;
@@ -291,6 +293,7 @@ function layoutTouchSelection(svg: SVGElement) {
   });
 
   overlay.replaceChildren(...rowElements);
+  host.dispatchEvent(new Event("typst-text-layout"));
 }
 
 function layoutText(svg: SVGElement) {

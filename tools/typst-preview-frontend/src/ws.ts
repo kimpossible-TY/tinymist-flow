@@ -19,6 +19,7 @@ import { handleHtmlPreviewFrame } from "./html-preview";
 import type { ReadingState } from "./document-theme";
 import { ChangeLocationQueue, parseChangeLocation, type ChangeLocation } from "./change-location";
 import { focusStatusPlacement } from "./mobile-viewport";
+import { SelectionActions } from "./selection-actions";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
 // for debug propose
@@ -64,7 +65,12 @@ export async function wsMain({
   let clearChangedLocation: (() => void) | undefined;
   let focusRevision: string | undefined;
   let pendingFocusRevision: string | undefined;
+  let pendingFocusDocument: string | undefined;
+  let queuedFocusRevision: string | undefined;
+  let queuedFocusDocument: string | undefined;
   let focusStatus: HTMLDivElement | undefined;
+  let focusEnabled = false;
+  let selectionActions: SelectionActions | undefined;
   const positionFocusStatus = () => {
     const viewport = window.visualViewport;
     if (!focusStatus || !viewport) return;
@@ -79,6 +85,7 @@ export async function wsMain({
         bottom: inset("bottom"),
       }),
     );
+    selectionActions?.position();
   };
   const korean = navigator.language.startsWith("ko");
   const showFocusStatus = (ko: string, en: string) => {
@@ -198,9 +205,47 @@ export async function wsMain({
     }
 
     const previousOnDidRender = svgDoc.impl.onDidRender;
+    if (previewMode === PreviewMode.Doc && !isContentPreview) {
+      selectionActions = new SelectionActions(
+        hookedElem,
+        (action, selection) => {
+          if (
+            !focusEnabled ||
+            !focusRevision ||
+            selection.revision !== focusRevision ||
+            !windowElem.typstWebsocket
+          ) {
+            showFocusStatus(
+              "문서 갱신 중 · 다시 선택해 주세요",
+              "Document updating · select text again",
+            );
+            return false;
+          }
+          const payload = {
+            ...selection.start,
+            revision: selection.revision,
+            selection: { text: selection.text, end: selection.end },
+          };
+          showFocusStatus(
+            action === "save" ? "선택한 텍스트 저장 중…" : "하이라이트 적용 중…",
+            action === "save" ? "Saving selected text…" : "Applying highlight…",
+          );
+          windowElem.typstWebsocket.send(
+            `${action === "save" ? "src-point" : "src-highlight"} ${JSON.stringify(payload)}`,
+          );
+          return true;
+        },
+        () => focusRevision,
+      );
+    }
     let restoreReadingState = readingState;
     svgDoc.impl.onDidRender = () => {
-      focusRevision = pendingFocusRevision;
+      // A viewport render must not adopt a hint before its document frame arrives.
+      focusRevision =
+        queuedFocusRevision === pendingFocusRevision ? queuedFocusRevision : undefined;
+      if (queuedFocusDocument) selectionActions?.setDocument(queuedFocusDocument);
+      selectionActions?.setEnabled(focusEnabled && !!focusRevision);
+      selectionActions?.afterRender();
       previousOnDidRender?.();
       if (restoreReadingState) {
         const state = restoreReadingState;
@@ -211,6 +256,8 @@ export async function wsMain({
     };
     svgDoc.impl.disposeList.push(() => {
       windowElem.onPreviewFocus = undefined;
+      selectionActions?.dispose();
+      selectionActions = undefined;
       focusStatus?.remove();
       focusStatus = undefined;
     });
@@ -459,6 +506,10 @@ export async function wsMain({
           svgDoc.reset();
           clearChangedLocation?.();
           focusRevision = pendingFocusRevision = undefined;
+          pendingFocusDocument = undefined;
+          queuedFocusRevision = queuedFocusDocument = undefined;
+          focusEnabled = false;
+          selectionActions?.setEnabled(false);
           windowElem.onPreviewFocus = undefined;
           windowElem.typstWebsocket.send("current");
         },
@@ -467,6 +518,8 @@ export async function wsMain({
         next: (e) => {
           console.log("WebSocket connection closed", e);
           focusRevision = pendingFocusRevision = undefined;
+          focusEnabled = false;
+          selectionActions?.setEnabled(false);
           if (focusStatus)
             showFocusStatus(
               "연결 끊김 · 다시 연결한 뒤 탭해 주세요",
@@ -540,6 +593,8 @@ export async function wsMain({
       ];
       console.log("recv", message[0], messageData.length);
       if (message[0] === "focus-enabled") {
+        focusEnabled = true;
+        selectionActions?.setEnabled(!!focusRevision);
         showFocusStatus(
           "Codex에 위치 공유 · 본문을 탭하세요",
           "Share a location with Codex · tap the document",
@@ -563,6 +618,37 @@ export async function wsMain({
       if (message[0] === "focus-revision") {
         pendingFocusRevision = dec.decode(message[1] as Uint8Array);
         focusRevision = undefined;
+        selectionActions?.setEnabled(false);
+        return;
+      }
+      if (message[0] === "focus-document") {
+        const id = dec.decode(message[1] as Uint8Array);
+        if (/^[a-f0-9]{32}$/.test(id)) pendingFocusDocument = id;
+        return;
+      }
+      if (message[0] === "highlight") {
+        const result = JSON.parse(dec.decode(message[1] as Uint8Array));
+        if (result.status === "highlighted") {
+          showFocusStatus(
+            "소스에 하이라이트 저장됨 · 컴파일 중",
+            "Highlight saved in source · compiling",
+          );
+        } else if (result.status === "stale") {
+          showFocusStatus(
+            "문서가 갱신됐습니다 · 다시 선택해 주세요",
+            "Document changed · select text again",
+          );
+        } else if (result.status === "unmapped" || result.status === "unsupported") {
+          showFocusStatus(
+            "소스 범위를 정확히 연결할 수 없습니다 · Codex 저장을 사용하세요",
+            "Cannot safely map this source range · use Save for Codex",
+          );
+        } else {
+          showFocusStatus(
+            "하이라이트 저장 실패 · 다시 선택해 주세요",
+            "Could not save highlight · select text again",
+          );
+        }
         return;
       }
       if (message[0] === "focus") {
@@ -570,13 +656,17 @@ export async function wsMain({
         if (result.status === "selected") {
           const name = result.filepath.split(/[\\/]/).pop();
           showFocusStatus(
-            `Codex용 위치 저장됨 · ${result.page}쪽 · ${name}:${result.line}`,
-            `Saved for Codex · p. ${result.page} · ${name}:${result.line}`,
+            `Codex용 ${result.text_selected ? "텍스트" : "위치"} 저장됨 · ${result.page}쪽 · ${name}:${result.line}`,
+            `Saved ${result.text_selected ? "text " : ""}for Codex · p. ${result.page} · ${name}:${result.line}`,
           );
         } else if (result.status === "unmapped") {
           showFocusStatus(
-            `${result.page}쪽 위치만 저장됨 · 글자를 탭하면 소스도 연결됩니다`,
-            `Page ${result.page} location saved · tap text to link its source`,
+            result.text_selected
+              ? `Codex용 텍스트 저장됨 · ${result.page}쪽 · 소스 연결 없음`
+              : `${result.page}쪽 위치만 저장됨 · 글자를 탭하면 소스도 연결됩니다`,
+            result.text_selected
+              ? `Text saved for Codex · p. ${result.page} · source unavailable`
+              : `Page ${result.page} location saved · tap text to link its source`,
           );
         } else if (result.status === "stale" || result.status === "not_ready") {
           showFocusStatus("문서가 갱신됐습니다 · 다시 탭해 주세요", "Document changed · tap again");
@@ -714,6 +804,10 @@ export async function wsMain({
         return;
       }
 
+      if (message[0] === "new" || message[0] === "diff-v1") {
+        queuedFocusRevision = pendingFocusRevision;
+        queuedFocusDocument = pendingFocusDocument;
+      }
       svgDoc.addChangement(message as any);
     }
 

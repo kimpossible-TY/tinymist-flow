@@ -13,7 +13,7 @@ pub use crate::actor::editor::{
     CompileStatus, ControlPlaneMessage, ControlPlaneResponse, ControlPlaneRx, ControlPlaneTx,
     PanelScrollByPositionRequest,
 };
-pub use crate::focus::PreviewSourceContext;
+pub use crate::focus::{PreviewHighlightStatus, PreviewSourceContext, PreviewTextSelection};
 pub use crate::outline::Outline;
 
 use std::sync::{Arc, OnceLock};
@@ -742,6 +742,20 @@ pub trait CompileView: Send + Sync {
     /// Resolve an explicit preview selection against this source snapshot.
     fn preview_source_context(&self, _pos: &DocumentPosition) -> Option<PreviewSourceContext> {
         None
+    }
+
+    /// Stable opaque workspace/entry identity for browser-local review marks.
+    fn preview_document_id(&self) -> Option<String> {
+        None
+    }
+
+    /// Apply a real source highlight to a verified literal preview text range.
+    fn highlight_preview_selection(
+        &self,
+        _start: &DocumentPosition,
+        _selection: &PreviewTextSelection,
+    ) -> PreviewHighlightStatus {
+        PreviewHighlightStatus::Unsupported
     }
 
     /// Allow a concrete preview view to compare its source snapshot with the

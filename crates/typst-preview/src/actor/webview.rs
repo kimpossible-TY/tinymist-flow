@@ -98,7 +98,7 @@ where
         let Some((store, view)) = self.focus.as_ref() else {
             return;
         };
-        let request = if payload.len() <= 4096 {
+        let request = if payload.len() <= 48 * 1024 {
             serde_json::from_str::<FocusRequest>(payload)
                 .ok()
                 .filter(FocusRequest::is_valid)
@@ -117,6 +117,7 @@ where
                     "page": snapshot.position.map(|p| p.page_no),
                     "filepath": snapshot.source.as_ref().map(|s| &s.filepath),
                     "line": snapshot.source.as_ref().map(|s| s.line),
+                    "text_selected": snapshot.selection.is_some(),
                 }),
                 result => {
                     log::warn!("could not persist preview focus: {result:?}");
@@ -130,6 +131,43 @@ where
             .send(WsMessage::Binary(format!("focus,{response}").into()))
             .await
             .log_error("SendPreviewFocus");
+    }
+
+    async fn highlight_selection(&mut self, payload: &str) {
+        let request = (payload.len() <= 48 * 1024)
+            .then(|| serde_json::from_str::<FocusRequest>(payload).ok())
+            .flatten()
+            .filter(|request| request.is_valid() && request.selection.is_some());
+        let response = match (self.focus.as_ref(), request) {
+            (Some((_, view)), Some(request)) => {
+                let view = view.read().clone();
+                match view {
+                    Some(view) if request.revision.as_ref() == Some(&view.revision()) => {
+                        match tokio::task::spawn_blocking(move || {
+                            view.highlight_preview_selection(
+                                &request.position,
+                                &request.selection.unwrap(),
+                            )
+                        })
+                        .await
+                        {
+                            Ok(status) => serde_json::json!({"status": status}),
+                            Err(error) => {
+                                log::warn!("could not highlight preview selection: {error}");
+                                serde_json::json!({"status": "error"})
+                            }
+                        }
+                    }
+                    _ => serde_json::json!({"status": "stale"}),
+                }
+            }
+            (None, _) => serde_json::json!({"status": "unsupported"}),
+            _ => serde_json::json!({"status": "invalid"}),
+        };
+        self.webview_websocket_conn
+            .send(WsMessage::Binary(format!("highlight,{response}").into()))
+            .await
+            .log_error("SendPreviewHighlight");
     }
 
     pub async fn run(mut self) {
@@ -205,6 +243,8 @@ where
                         } else if let Ok(path) = serde_json::from_str(path) {
                             self.render_sender.send(RenderActorRequest::WebviewResolveFrameLoc(path)).log_error("WebViewActor");
                         }
+                    } else if let Some(selection) = msg.strip_prefix("src-highlight ") {
+                        self.highlight_selection(selection).await;
                     } else if let Some(state) = msg.strip_prefix("viewer-window-state ") {
                         if let Ok(state) = serde_json::from_str::<ViewerWindowStateMessage>(state) {
                             self.editor_sender.send(EditorActorRequest::ViewerWindowState(state)).log_error("WebViewActor");

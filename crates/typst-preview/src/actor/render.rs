@@ -155,6 +155,14 @@ impl RenderActor {
             pending_full_render = false;
 
             if self.focus_enabled {
+                if let Some(id) = view.preview_document_id()
+                    && self
+                        .svg_sender
+                        .send(format!("focus-document,{id}").into_bytes())
+                        .is_err()
+                {
+                    break;
+                }
                 let hint = format!("focus-revision,{}", view.revision()).into_bytes();
                 if self.svg_sender.send(hint).is_err() {
                     break;

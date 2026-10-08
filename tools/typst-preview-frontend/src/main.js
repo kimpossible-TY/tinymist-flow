@@ -5,6 +5,7 @@ import "./styles/toolbar.css";
 import "./styles/layout.css";
 import "./styles/help-panel.css";
 import "./styles/outline.css";
+import "./styles/selection-actions.css";
 
 import { wsMain, PreviewMode } from "./ws";
 import { setupDrag } from "./drag";

@@ -101,3 +101,26 @@ Prior handoff state: the installed bundle was restored to 0.1.0 and its LaunchAg
 2026-09-28 device report: The user confirmed scrolling stability, following changed locations, and a tap followed by a Codex request on iPhone. Native selection inside SVG `foreignObject` was displaced. An HTML overlay outside SVG aligned the initial selection and enabled Copy, but a downward handle drag occasionally selected all preceding content. Keeping the overlay hit-testable between text rows, disabling SVG selection, and retaining the overlay DOM while selected resolved that behavior in repeated iPhone tests on HTTPS port 23632. Copy and short-tap location selection also worked there.
 
 The same frontend binary now serves the production HTTPS port 23625. TypeScript/Vite and release CLI builds passed; HTTPS returned 200 and a WebSocket delivered the complete document frame. The user confirmed long-press, downward handle adjustment, Copy, and short-tap location selection in iPhone Safari on that address. After macOS administrator authentication, the Documents permission was switched back on and the temporary restart loop was stopped. The managed PDE LaunchAgent resumed on port 23625 with the original project and fonts paths. A certificate-validated WebSocket delivered a complete 16,630,540-byte document frame, and Tail Hosting's focus reader reported `service_matches: true` for the LaunchAgent PID. Restart reset the focus record to waiting; the next user tap establishes a fresh selection.
+
+## 14. Review selected text
+
+- [x] 14.1 Capture native preview ranges and add an accessible safe-area web toolbar while preserving copying and tap behavior.
+- [x] 14.2 Persist exact selected text/endpoints through the existing revision-validated Codex focus channel; test stale, unmapped, bounded and legacy tap requests.
+- [x] 14.3 Apply the real Typst highlight function only to verified literal workspace source ranges; test range matching, syntax and changed-disk rejection.
+- [x] 14.4 Paint bounded temporary red strikes with document-scoped storage, virtual-page/layout handling, undo and clear without source edits or compilation.
+- [x] 14.5 Update source documentation and validate frontend tests/types/build, affected Rust tests/lints, isolated browser behavior and strict OpenSpec consistency.
+- [ ] 14.6 Confirm native selection, callout coexistence and toolbar taps on the user's physical iPhone after an installed-engine update.
+
+## 15. Math-aware highlighting
+
+- [x] 15.1 Prefer the source module's existing `highlighted` function over the standard text-only function.
+- [x] 15.2 Map complete equations and mixed text/equation ranges using rendered glyph coverage, rejecting partial formulas and reused source ranges.
+- [x] 15.3 Validate custom-wrapper compilation and preview range edits, update source guidance and verify the OpenSpec change.
+
+## 16. Install selected-text actions
+
+- [x] 16.1 Back up and patch the canonical and installed text-utils helpers to support singleton content; compile text, math and mixed ranges against the real package.
+- [ ] 16.2 Build a clean-commit native engine, package it with the clean Flow-only app tooling and validate its signature and external-engine provenance.
+- [ ] 16.3 Install with a recovery bundle, preserve each profile's running state and verify the existing PDE HTTPS document and selected-text toolbar.
+
+Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser emulation and transport verification.

@@ -184,3 +184,36 @@ The frontend SHALL permit native text selection and copy callouts on the selecta
 #### Scenario: Native pinch zoom feedback
 - **WHEN** the visual viewport moves or resizes during native zoom
 - **THEN** preview viewport work is requested and focus feedback remains within the visible viewport
+
+### Requirement: Selected text has review actions
+Document preview SHALL offer an accessible web toolbar for a native text range with Highlight, Save for Codex and Red strike actions. It SHALL preserve native selection and copying and place its controls within the visible safe area.
+
+#### Scenario: Save a native text range for Codex
+- **WHEN** the reader chooses Save for Codex with the current completed-render revision
+- **THEN** the existing local focus record includes the exact selected text and its page endpoints alongside available source context
+- **AND** the browser acknowledges persistence without requesting a document render or compilation
+- **AND** stale selections clear the previous current context instead of claiming success
+
+#### Scenario: Apply a persistent highlight
+- **WHEN** both range endpoints and selected text resolve unambiguously to literal markup text in one writable workspace source file that still matches the compilation snapshot
+- **THEN** Highlight wraps that source slice in the real Typst highlight function and the watcher compiles the change
+- **AND** unsupported, ambiguous, stale or changed-disk selections do not modify source
+
+#### Scenario: Highlight text containing an equation
+- **WHEN** the source module exports a callable `highlighted` helper and a current range covers complete equations alongside text
+- **THEN** the source edit uses `#highlighted[...]` so the document's helper handles the equation backgrounds and theme
+- **AND** rendered glyph coverage verifies the selected range without comparing mathematical notation to raw source spelling
+- **AND** partial formulas and source glyphs reused at multiple rendered locations do not modify source
+- **AND** documents without that helper retain ordinary text highlighting and reject equation ranges
+
+#### Scenario: Mark text temporarily
+- **WHEN** the reader chooses Red strike
+- **THEN** a red line crosses each selected text fragment immediately without changing source or triggering compilation
+- **AND** marks follow zoom, resize and unchanged virtual pages
+- **AND** undo and clear remove marks without compiling
+- **AND** changed-page geometry is discarded rather than applied to different text
+- **AND** browser persistence is scoped to the document and shared across its theme variants
+
+#### Scenario: Highlight helper fails for the selected body
+- **WHEN** a callable document helper fails to compile the proposed highlight, including singleton content or a binding unavailable at the insertion point
+- **THEN** the source remains unchanged and the viewer can still save the selected text for Codex

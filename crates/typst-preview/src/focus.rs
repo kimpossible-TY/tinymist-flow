@@ -10,6 +10,47 @@ use serde::{Deserialize, Serialize};
 
 use crate::CompileView;
 
+/// A bounded native text range in the rendered document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreviewTextSelection {
+    /// Exact rendered text supplied explicitly by the reader.
+    pub text: String,
+    /// Position of the last selected glyph; the request position is the first.
+    pub end: DocumentPosition,
+}
+
+impl PreviewTextSelection {
+    pub(crate) fn is_valid(&self) -> bool {
+        !self.text.trim().is_empty()
+            && self.text.chars().count() <= 8000
+            && valid_position(&self.end)
+    }
+}
+
+/// Result of applying a source highlight to an explicit preview range.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewHighlightStatus {
+    /// Source was updated; the ordinary watcher will compile it.
+    Highlighted,
+    /// The source on disk no longer matches the compilation snapshot.
+    Stale,
+    /// Text and endpoints could not identify one literal markup range.
+    Unmapped,
+    /// This view or source does not support highlight edits.
+    Unsupported,
+    /// The source could not be written.
+    Error,
+}
+
+fn valid_position(position: &DocumentPosition) -> bool {
+    position.page_no > 0
+        && position.x.is_finite()
+        && position.y.is_finite()
+        && position.x >= 0.0
+        && position.y >= 0.0
+}
+
 /// A source excerpt from the same compiler snapshot used for hit testing.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PreviewSourceContext {
@@ -28,16 +69,18 @@ pub(crate) struct FocusRequest {
     #[serde(flatten)]
     pub position: DocumentPosition,
     pub revision: Option<String>,
+    #[serde(default)]
+    pub selection: Option<PreviewTextSelection>,
 }
 
 impl FocusRequest {
     pub fn is_valid(&self) -> bool {
-        self.position.page_no > 0
-            && self.position.x.is_finite()
-            && self.position.y.is_finite()
-            && self.position.x >= 0.0
-            && self.position.y >= 0.0
+        valid_position(&self.position)
             && self.revision.as_ref().is_none_or(|r| r.len() <= 64)
+            && self
+                .selection
+                .as_ref()
+                .is_none_or(PreviewTextSelection::is_valid)
     }
 }
 
@@ -54,6 +97,8 @@ pub(crate) struct FocusSnapshot {
     pub rendered_revision: Option<String>,
     pub compiled_revision: Option<String>,
     pub source: Option<PreviewSourceContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<PreviewTextSelection>,
 }
 
 /// One file per preview service; all viewers share its latest selection.
@@ -96,6 +141,7 @@ impl FocusStore {
             rendered_revision: None,
             compiled_revision: None,
             source: None,
+            selection: None,
         })?;
         Ok(store)
     }
@@ -137,6 +183,9 @@ impl FocusStore {
             rendered_revision: request.revision,
             compiled_revision: revision,
             source,
+            selection: matches!(status, "selected" | "unmapped")
+                .then_some(request.selection)
+                .flatten(),
         };
         self.write(&snapshot)?;
         Ok(snapshot)
@@ -228,6 +277,7 @@ mod tests {
                 y: 20.0,
             },
             revision: Some(revision.into()),
+            selection: None,
         };
         let read =
             || serde_json::from_slice::<FocusSnapshot>(&std::fs::read(&path).unwrap()).unwrap();
@@ -267,10 +317,64 @@ mod tests {
             assert!(
                 !FocusRequest {
                     position: DocumentPosition { page_no, x, y },
-                    revision: None
+                    revision: None,
+                    selection: None
                 }
                 .is_valid()
             );
         }
+    }
+
+    #[test]
+    fn ranges_retain_exact_text_only_for_current_revisions() {
+        let path = std::env::temp_dir().join(format!(
+            "tinymist-range-{}-{}.json",
+            std::process::id(),
+            now_ms()
+        ));
+        let store = FocusStore::new(path.clone()).unwrap();
+        let request = |revision: &str, x| FocusRequest {
+            position: DocumentPosition {
+                page_no: 1,
+                x,
+                y: 20.0,
+            },
+            revision: Some(revision.into()),
+            selection: Some(PreviewTextSelection {
+                text: "선택한 text\nsecond line".into(),
+                end: DocumentPosition {
+                    page_no: 2,
+                    x: 30.0,
+                    y: 10.0,
+                },
+            }),
+        };
+        let selected = store
+            .record(request("7", 10.0), Some(Arc::new(View)), 1)
+            .unwrap();
+        assert_eq!(selected.selection.unwrap().text, "선택한 text\nsecond line");
+        let unmapped = store
+            .record(request("7", 110.0), Some(Arc::new(View)), 1)
+            .unwrap();
+        assert_eq!(unmapped.status, "unmapped");
+        assert!(unmapped.selection.is_some());
+        let stale = store
+            .record(request("6", 10.0), Some(Arc::new(View)), 1)
+            .unwrap();
+        assert!(stale.selection.is_none());
+        let waiting = store.record(request("7", 10.0), None, 1).unwrap();
+        assert!(waiting.selection.is_none());
+        let mut invalid = request("7", 10.0);
+        invalid.selection.as_mut().unwrap().text = "x".repeat(8001);
+        assert!(!invalid.is_valid());
+        invalid.selection.as_mut().unwrap().text = "   ".into();
+        assert!(!invalid.is_valid());
+        invalid.selection.as_mut().unwrap().text = "text".into();
+        invalid.selection.as_mut().unwrap().end.page_no = 0;
+        assert!(!invalid.is_valid());
+        let legacy: FocusRequest =
+            serde_json::from_str(r#"{"page_no":1,"x":1,"y":2,"revision":"7"}"#).unwrap();
+        assert!(legacy.is_valid() && legacy.selection.is_none());
+        std::fs::remove_file(path).unwrap();
     }
 }

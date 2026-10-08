@@ -107,6 +107,96 @@ impl tinymist_preview::CompileView for PreviewCompileView {
         self.art.world().revision().get().to_string()
     }
 
+    fn preview_document_id(&self) -> Option<String> {
+        let world = self.art.world();
+        let root = world.entry_state().workspace_root()?;
+        let entry = world.path_for_id(world.main_id()?).ok()?.to_err().ok()?;
+        Some(format!(
+            "{:032x}",
+            tinymist_std::hash::hash128(&(root, entry))
+        ))
+    }
+
+    fn highlight_preview_selection(
+        &self,
+        start: &reflexo::debug_loc::DocumentPosition,
+        selection: &tinymist_preview::PreviewTextSelection,
+    ) -> tinymist_preview::PreviewHighlightStatus {
+        use tinymist_preview::PreviewHighlightStatus as Status;
+        let resolve = || {
+            let (first, _) = self.resolve_frame_loc(start)?;
+            let (last, _) = self.resolve_frame_loc(&selection.end)?;
+            let id = first.span.id()?;
+            if last.span.id()? != id || crate::world::vfs::WorkspaceResolver::is_package_file(id) {
+                return None;
+            }
+            let world = self.art.world();
+            let source = world.source(id).ok()?;
+            let first_range = source.find(first.span)?.range();
+            let last_range = source.find(last.span)?.range();
+            let first_offset =
+                first_range.start + first.offset.min(first_range.len().saturating_sub(1));
+            let last_offset =
+                last_range.start + last.offset.min(last_range.len().saturating_sub(1));
+            let function = typst_shim::eval::eval_compat(world, &source)
+                .ok()
+                .and_then(|module| {
+                    module
+                        .scope()
+                        .get("highlighted")
+                        .map(|binding| matches!(binding.read(), typst::foundations::Value::Func(_)))
+                })
+                .filter(|callable| *callable)
+                .map_or(super::highlight::HighlightFunction::Standard, |_| {
+                    super::highlight::HighlightFunction::MathAware
+                });
+            let TypstDocument::Paged(doc) = self.art.doc.as_ref()? else {
+                return None;
+            };
+            let mut glyphs = vec![];
+            for page in doc.pages() {
+                collect_source_glyphs(&page.frame, &source, &mut glyphs);
+            }
+            let range = super::highlight::selection_range(
+                &source,
+                first_offset,
+                last_offset,
+                &selection.text,
+                &glyphs,
+                function,
+            )?;
+            let path = world.path_for_id(id).ok()?.to_err().ok()?;
+            let path = std::fs::canonicalize(path).ok()?;
+            let root = std::fs::canonicalize(world.entry_state().workspace_root()?).ok()?;
+            if !path.starts_with(root) {
+                return None;
+            }
+            // A custom helper may fail for a particular body or be unavailable
+            // at this lexical position. Validate in an isolated world before
+            // committing an edit to the user's document.
+            use crate::world::base::ShadowApi;
+            let mut candidate = world.clone();
+            // Cloning shares the completed world's frozen source database.
+            // Detach it so the compile reads the candidate shadow source.
+            candidate.take_db();
+            let updated = super::highlight::highlighted_source(&source, range.clone(), function);
+            candidate
+                .map_shadow_by_id(id, Bytes::from_string(updated))
+                .ok()?;
+            if typst::compile::<tinymist_std::typst::TypstPagedDocument>(&candidate)
+                .output
+                .is_err()
+            {
+                return None;
+            }
+            Some((source, path, range, function))
+        };
+        let Some((source, path, range, function)) = resolve() else {
+            return Status::Unmapped;
+        };
+        super::highlight::write_highlight(&path, &source, range, function)
+    }
+
     fn preview_source_context(
         &self,
         pos: &reflexo::debug_loc::DocumentPosition,
@@ -438,6 +528,49 @@ fn internal_link_at(frame: &Frame, point: Point) -> bool {
         FrameItem::Group(group) => internal_link_at(&group.frame, point - *pos),
         _ => false,
     })
+}
+
+/// Gather one entry per shaped text cluster, preserving repeated source uses.
+fn collect_source_glyphs(
+    frame: &Frame,
+    source: &Source,
+    output: &mut Vec<super::highlight::RenderedGlyph>,
+) {
+    for (_, item) in frame.items() {
+        match item {
+            FrameItem::Group(group) => collect_source_glyphs(&group.frame, source, output),
+            FrameItem::Text(text) => {
+                let mut clusters = HashSet::new();
+                for glyph in &text.glyphs {
+                    if glyph.span.0.id() != Some(source.id()) || !clusters.insert(glyph.range()) {
+                        continue;
+                    }
+                    let Some(node) = source.find(glyph.span.0) else {
+                        continue;
+                    };
+                    let Some(content) = text.text.get(glyph.range()) else {
+                        continue;
+                    };
+                    let cluster_offset = if node.kind() == SyntaxKind::MathText {
+                        usize::from(glyph.span.1).max(glyph.range().start)
+                    } else {
+                        usize::from(glyph.span.1)
+                    };
+                    let offset = node.range().start + cluster_offset;
+                    output.push(super::highlight::RenderedGlyph {
+                        offset,
+                        end: if node.kind() == SyntaxKind::Text {
+                            offset + content.len()
+                        } else {
+                            node.range().end
+                        },
+                        text: content.to_owned(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

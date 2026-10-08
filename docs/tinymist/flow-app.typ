@@ -16,7 +16,17 @@ Stop disables the project's LaunchAgent until Start is used again. Closing or qu
 
 The status distinguishes a stopped process from a responding HTTP server. HTTP readiness does not prove successful compilation: inspect the preview and logs for compiler errors. After restarting, tap the document again before asking Codex about a selected passage.
 
-On touch devices, selecting text temporarily holds preview rendering so the visual page and native selection stay on the same revision. Dismiss the selection to apply pending edits and refresh the visible pages. Native copying covers the currently populated preview pages, not an arbitrary range across the whole document. A drag or long press does not share a source location with Codex; dismiss the selection and use a short tap to share one.
+On touch devices, selecting text temporarily holds preview rendering so the visual page and native selection stay on the same revision. Dismiss the selection to apply pending edits and refresh the visible pages. Native copying covers the currently populated preview pages, not an arbitrary range across the whole document. A drag or long press does not automatically share a source location with Codex; use Save for Codex in the selection toolbar to save the exact text, or dismiss the selection and use a short tap to share a location.
+
+== Selected text actions
+
+Select text with the native handles, then use the web toolbar near the bottom of the screen. Highlight uses the source module's callable `highlighted` helper when available, writing `#highlighted[...]` so text and complete equations retain the document's background and theme handling. Without this helper, literal text uses `#highlight[...]` and equations cannot be highlighted automatically. This changes the Typst source and the ordinary watcher recompiles it, so the highlight also appears in exports. Rendered glyph coverage verifies complete equations even when their notation differs from the source. Partial equations, reused or generated source content, code, other markup, different source files and changed source snapshots cannot be edited automatically. The candidate document must compile before any source is saved; Save for Codex can still supply the rendered text when a range cannot be edited.
+
+A custom helper must accept a single text element or equation as well as mixed content. When iterating its body, use `if body.has("children") { body.children } else { (body,) }` so singleton content does not cause a missing-field error.
+
+Save for Codex records up to 8000 selected characters and their page endpoints alongside the existing source context. It acknowledges persistence and does not start a Codex turn or compile the document. A newer compiler revision requires selecting again.
+
+Red strike draws a temporary red line across each selected fragment without changing source or compiling. Undo removes the latest mark and Clear marks removes this document's temporary marks in this browser. Marks are stored separately by document in this browser and survive refresh, theme switches and scrolling through unchanged virtual pages. A page whose text or layout changes loses its old marks to avoid displaying them over the wrong passage. Browser storage may be unavailable in private browsing; memory-only marks then last until the view is closed. Temporary marks are not included in PDF exports or synchronized to other devices.
 
 == Device document theme
 
