@@ -1,0 +1,8 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/ref_heading.typ
+---
+Range: 3:25:3:31
+
+Label: `head`

@@ -1,0 +1,43 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/render_equation_no_html.typ
+---
+Range: 14:20:14:23
+
+```typc
+let lam(
+  A: type,
+  B: type,
+) = dictionary;
+```
+
+
+======
+
+
+Lambda constructor.
+
+Typing Rule:
+
+Γ,x:A⊢M:BΓ⊢a:BΓ⊢λ(x:A)→M:π(x:A)→B
+
+# Positional Parameters
+
+## A
+
+```typc
+type: type
+```
+
+The type of the argument.
+  - It can be also regarded as the condition of the proposition.
+
+## B (positional)
+
+```typc
+type: type
+```
+
+The type of the body.
+  - It can be also regarded as the conclusion of the proposition.

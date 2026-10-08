@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -24,8 +25,8 @@ DATA = Path.home() / 'Library/Application Support/tinymist-flow'
 def run(args, **kwargs):
     return subprocess.run([str(a) for a in args], check=True, **kwargs)
 
-def capture(args):
-    return subprocess.check_output([str(a) for a in args], text=True).strip()
+def capture(args, **kwargs):
+    return subprocess.check_output([str(a) for a in args], text=True, **kwargs).strip()
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -69,19 +70,22 @@ def resolve_engine(requested=None):
     return engine, version
 
 def build(args):
+    engine_build = None
+    if getattr(args, 'build_engine', False):
+        args.engine, engine_build = build_native_engine(args.jobs)
     engine, engine_version = resolve_engine(args.engine)
     app = args.output.expanduser().resolve()
     if app.name != 'tinymist-flow.app': raise ValueError('Unexpected output app name')
     app.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.flow-build-', dir=app.parent) as tmp:
         staged = Path(tmp) / app.name
-        manifest = build_bundle(args, staged, engine, engine_version)
+        manifest = build_bundle(args, staged, engine, engine_version, engine_build)
         if app.exists(): shutil.rmtree(app)
         os.replace(staged, app)
     write_json(app.parent / 'release.json', {**manifest, 'appExecutableSHA256': digest(executable(app))})
     print(app)
 
-def build_bundle(args, app, engine, engine_version):
+def build_bundle(args, app, engine, engine_version, engine_build=None):
     mac = app / 'Contents/MacOS'; resources = app / 'Contents/Resources'
     mac.mkdir(parents=True); resources.mkdir()
     engine_input_hash = digest(engine)
@@ -116,14 +120,43 @@ def build_bundle(args, app, engine, engine_version):
     run(['/usr/bin/codesign', '--force', '--sign', identity, '--identifier', APP_ID + '.engine', mac / 'flow-engine'])
     manifest = {'version': version, 'sourceRevision': capture(['git', '-C', ROOT, 'rev-parse', 'HEAD']),
                 'sourceDirty': bool(capture(['git', '-C', ROOT, 'status', '--porcelain'])),
-                'engineSource': 'external', 'engineVersion': engine_version,
+                'engineSource': 'native' if engine_build is not None else 'external', 'engineVersion': engine_version,
                 'engineInputSHA256': engine_input_hash,
                 'engineSHA256': digest(mac / 'flow-engine'), 'signing': 'ad-hoc' if identity == '-' else identity,
                 'builtAt': dt.datetime.now(dt.timezone.utc).isoformat()}
+    if engine_build is not None:
+        manifest['engineBuild'] = engine_build
     write_json(resources / 'release.json', manifest)
     run(['/usr/bin/codesign', '--force', '--sign', identity, '--identifier', APP_ID, app])
     validate(app)
     return manifest
+
+def build_native_engine(jobs):
+    """Build a portable native Mac engine with a recorded ThinLTO profile."""
+    if sys.platform != 'darwin':
+        raise ValueError('The macOS app must be built on macOS')
+    if jobs < 1:
+        raise ValueError('Build jobs must be positive')
+    machine = platform.machine()
+    if machine == 'x86_64':
+        translated = subprocess.run(['/usr/sbin/sysctl', '-in', 'sysctl.proc_translated'],
+                                    capture_output=True, text=True)
+        if translated.stdout.strip() == '1':
+            raise ValueError('Run the build with a native ARM Python or terminal on Apple Silicon')
+    target = {'arm64': 'aarch64-apple-darwin', 'x86_64': 'x86_64-apple-darwin'}.get(machine)
+    if target is None:
+        raise ValueError('Unsupported macOS host architecture')
+    metadata = json.loads(capture(['cargo', 'metadata', '--locked', '--format-version=1', '--no-deps',
+                                   '--manifest-path', ROOT / 'Cargo.toml'], cwd=ROOT))
+    run(['cargo', 'build', '--locked', '--profile', 'flow-release', '--target', target,
+         '--bin', 'tinymist', '--jobs', str(jobs)], cwd=ROOT)
+    path = Path(metadata['target_directory']) / target / 'flow-release/tinymist'
+    settings = {'profile': 'flow-release', 'target': target, 'configuredLto': 'thin',
+                'rustflags': os.environ.get('RUSTFLAGS', ''),
+                'encodedRustflags': os.environ.get('CARGO_ENCODED_RUSTFLAGS', '')}
+    if 'CARGO_PROFILE_FLOW_RELEASE_LTO' in os.environ:
+        settings['profileLtoOverride'] = os.environ['CARGO_PROFILE_FLOW_RELEASE_LTO']
+    return path, settings
 
 def profiles(app):
     if not executable(app).exists(): return []
@@ -193,7 +226,11 @@ def _replace_app(source, destination, data_dir, check_health):
     write_json(data_dir / 'installed-release.json', validate(destination))
     print(destination)
 
-def install(args): replace_app(args.source.resolve(), args.app.expanduser().resolve())
+def install(args):
+    deferred = getattr(args, 'defer_health_check', False)
+    replace_app(args.source.resolve(), args.app.expanduser().resolve(), check_health=not deferred)
+    if deferred:
+        print('Live preview health verification deferred; complete any macOS consent prompt, then verify document delivery.')
 
 def rollback(args):
     previous = Path(json.loads((DATA / 'previous-release.json').read_text())['app'])
@@ -255,8 +292,8 @@ def restore_hosting(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest='command', required=True)
-    b = sub.add_parser('build'); b.add_argument('--engine', type=Path, help='External Flow-compatible engine (FLOW_ENGINE_PATH or installed app by default)'); b.add_argument('--output', type=Path, default=ROOT / 'dist/tinymist-flow.app'); b.add_argument('--version', default='0.1.0'); b.add_argument('--identity', default=os.environ.get('FLOW_SIGN_IDENTITY', '-')); b.set_defaults(func=build)
-    i = sub.add_parser('install'); i.add_argument('source', type=Path); i.add_argument('--app', type=Path, default=DEFAULT_APP); i.set_defaults(func=install)
+    b = sub.add_parser('build'); b.add_argument('--engine', type=Path, help='External Flow-compatible engine (FLOW_ENGINE_PATH or installed app by default)'); b.add_argument('--output', type=Path, default=ROOT / 'dist/tinymist-flow.app'); b.add_argument('--version', default='0.1.0'); b.add_argument('--identity', default=os.environ.get('FLOW_SIGN_IDENTITY', '-')); b.add_argument('--build-engine', action='store_true', help='Build the native engine with ThinLTO before packaging'); b.add_argument('--jobs', type=int, default=2, help='Cargo workers when building the engine'); b.set_defaults(func=build)
+    i = sub.add_parser('install'); i.add_argument('source', type=Path); i.add_argument('--app', type=Path, default=DEFAULT_APP); i.add_argument('--defer-health-check', action='store_true', help='Defer the live HTTP deadline while macOS consent is pending; keep bundle validation and backup'); i.set_defaults(func=install)
     r = sub.add_parser('rollback'); r.add_argument('--app', type=Path, default=DEFAULT_APP); r.set_defaults(func=rollback)
     m = sub.add_parser('migrate-tail-hosting'); m.add_argument('root', type=Path); m.add_argument('--app', type=Path, default=DEFAULT_APP); m.set_defaults(func=migrate)
     restore = sub.add_parser('restore-tail-hosting'); restore.set_defaults(func=restore_hosting)

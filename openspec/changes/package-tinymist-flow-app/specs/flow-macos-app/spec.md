@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
-### Requirement: Flow-only source repository
-The repository SHALL maintain only the native Flow app, packaging, branding, app tests, app documentation, and Flow-specific workflow contracts. The engine implementation, editor integrations, and their build and test workspaces SHALL be excluded from the maintained source tree. Prior source history and applicable license notices SHALL be preserved.
+### Requirement: Integrated Flow source repository
+The repository SHALL maintain the native Flow app, packaging, branding, documentation, engine implementation, preview frontend, supporting editor integrations, tests and workflow contracts. Applicable license notices and prior source history SHALL be preserved.
 
-#### Scenario: Build from an app-only checkout
-- **WHEN** a compatible external engine executable is supplied to an app-only checkout
+#### Scenario: Package a compatible external engine
+- **WHEN** a compatible external engine executable is supplied
 - **THEN** the app can be built and tested without an engine source workspace
 - **AND** the engine is copied into the app bundle independently of the Flow source revision
 - **AND** current preview lifecycle and engine feature arguments are preserved
@@ -21,6 +21,15 @@ Packaging SHALL accept an explicit engine path or FLOW_ENGINE_PATH and otherwise
 - **WHEN** the supplied engine is missing or lacks the required preview CLI support
 - **THEN** packaging reports an actionable error
 - **AND** an existing output bundle is preserved
+
+### Requirement: Native engine build
+Packaging SHALL support --build-engine using the locked flow-release profile and the native macOS target. The release manifest SHALL record engine build settings, version and hashes. Packaging SHALL build into a staged bundle and preserve an existing output when packaging fails.
+
+#### Scenario: Build the maintained engine
+- **WHEN** a native engine build is requested
+- **THEN** the maintained workspace is built with the flow-release profile and copied into the staged app
+- **AND** engine build metadata accompanies the app source revision and engine hashes
+- **AND** development builds do not replace the installed app or its running engine
 
 ### Requirement: Product repository identity
 The development repository SHALL be named tinymist-flow to match the product. Current documentation and local remote URLs SHALL use this name. The earlier independent repository SHALL be retained as tinymist-flow-archive.

@@ -1,0 +1,38 @@
+---
+source: crates/tinymist-query/src/completion.rs
+description: Completion on c( (74..76)
+expression: "JsonRepr::new_pure(results)"
+input_file: crates/tinymist-query/src/fixtures/completion/import_self.typ
+---
+[
+ {
+  "isIncomplete": false,
+  "items": [
+   {
+    "kind": 9,
+    "label": "base",
+    "labelDetails": {
+     "description": "module(base)"
+    },
+    "sortText": "009",
+    "textEdit": {
+     "newText": "base",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   }
+  ]
+ },
+ {
+  "isIncomplete": false,
+  "items": []
+ }
+]

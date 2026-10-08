@@ -1,0 +1,15 @@
+---
+source: crates/tinymist-query/src/analysis.rs
+expression: result
+input_file: crates/tinymist-query/src/fixtures/type_check/fn_named.typ
+---
+"foo" = (("d": @d) => @d).with(..("d": 3) => any)
+"d" = ( ⪰ Type(int) | 3)
+"x" = 3
+=====
+5..8 -> @foo
+9..10 -> @d
+17..18 -> @d
+24..25 -> @x
+28..31 -> @foo
+28..33 -> 3

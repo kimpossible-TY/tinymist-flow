@@ -1,6 +1,6 @@
 ## Why
 
-Flow needs a stable branded macOS installation, project settings, visible preview controls, and recoverable updates. These app responsibilities can be maintained independently of the engine implementation. The repository should own only Flow sources while continuing to bundle the existing compatible tinymist executable and preserve its preview features.
+Flow needs a stable branded macOS installation, project settings, visible preview controls, and recoverable updates. These app responsibilities can be maintained independently of the engine implementation. The repository maintains Flow, engine and preview sources while supporting compatible external engine packaging and preserving preview features.
 
 ## What Changes
 
@@ -11,8 +11,8 @@ Flow needs a stable branded macOS installation, project settings, visible previe
 - Import existing Tail Hosting configuration and keep HTTPS ingress owned by Tail Hosting.
 - Document app maintenance, external engine compatibility, deployment, and recovery.
 - Align the development repository name and documentation with tinymist-flow, retaining the earlier independent repository as tinymist-flow-archive.
-- Manage only Flow app sources, packaging, branding, app tests, and app documentation; consume the existing compatible preview engine as an external binary.
-- Remove the engine workspace, editor integrations, unrelated fixtures, documentation, and release tooling from the maintained tree.
+- Maintain the app, engine, preview frontend and supporting workspace sources together; accept an external engine or build a native engine with recorded ThinLTO settings.
+- Preserve staged packaging, external engine provenance, freshly compiled app tests, and the repository naming changes when integrating preview work.
 
 ## Capabilities
 
@@ -23,4 +23,4 @@ Flow needs a stable branded macOS installation, project settings, visible previe
 
 ## Impact
 
-Maintained sources are `apps/macos`, `assets/branding`, app packaging and tests, standalone Typst documentation, and the Tail Hosting adapter. The engine is an external executable with its existing preview contract. Engine crates, editor extensions, and unrelated upstream workspaces and release tooling are removed from the maintained tree.
+Maintained sources include the app, branding, packaging, tests, Typst documentation, engine crates, preview frontend, supporting editor workspaces and the Tail Hosting adapter. Packaging accepts compatible external engines or builds the maintained engine sources; installed engines remain independent of development outputs.

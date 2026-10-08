@@ -1,0 +1,33 @@
+---
+source: crates/tinymist-query/src/completion.rs
+description: Completion on e (97..98)
+expression: "JsonRepr::new_pure(results)"
+input_file: crates/tinymist-query/src/fixtures/completion/func_pos_arg_field_call2.typ
+---
+[
+ {
+  "isIncomplete": false,
+  "items": [
+   {
+    "kind": 7,
+    "label": "text",
+    "labelDetails": {
+     "description": "str"
+    },
+    "textEdit": {
+     "newText": "text, ",
+     "range": {
+      "end": {
+       "character": 71,
+       "line": 2
+      },
+      "start": {
+       "character": 70,
+       "line": 2
+      }
+     }
+    }
+   }
+  ]
+ }
+]

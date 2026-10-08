@@ -1,0 +1,144 @@
+---
+source: crates/tinymist-query/src/completion.rs
+description: Completion on c( (77..79)
+expression: "JsonRepr::new_pure(results)"
+input_file: crates/tinymist-query/src/fixtures/completion/import_star.typ
+---
+[
+ {
+  "isIncomplete": false,
+  "items": [
+   {
+    "kind": 3,
+    "label": "aa",
+    "labelDetails": {
+     "description": "() => 1"
+    },
+    "sortText": "000",
+    "textEdit": {
+     "newText": "aa()${1:}",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "label": "aab",
+    "labelDetails": {
+     "description": "() => 1"
+    },
+    "sortText": "001",
+    "textEdit": {
+     "newText": "aab()${1:}",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "label": "aabc",
+    "labelDetails": {
+     "description": "() => 1"
+    },
+    "sortText": "002",
+    "textEdit": {
+     "newText": "aabc()${1:}",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "label": "aac",
+    "labelDetails": {
+     "description": "() => 1"
+    },
+    "sortText": "003",
+    "textEdit": {
+     "newText": "aac()${1:}",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   }
+  ]
+ },
+ {
+  "isIncomplete": false,
+  "items": [
+   {
+    "kind": 3,
+    "label": "aabc",
+    "labelDetails": {
+     "description": "() => 1"
+    },
+    "sortText": "002",
+    "textEdit": {
+     "newText": "aabc()${1:}",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   },
+   {
+    "kind": 3,
+    "label": "aac",
+    "labelDetails": {
+     "description": "() => 1"
+    },
+    "sortText": "003",
+    "textEdit": {
+     "newText": "aac()${1:}",
+     "range": {
+      "end": {
+       "character": 4,
+       "line": 2
+      },
+      "start": {
+       "character": 1,
+       "line": 2
+      }
+     }
+    }
+   }
+  ]
+ }
+]

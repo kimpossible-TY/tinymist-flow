@@ -1,0 +1,86 @@
+>#let a = none;
+#^ source.typst keyword.control.hash.typst
+# ^^^ source.typst meta.expr.let.typst storage.type.typst
+#    ^ source.typst meta.expr.let.typst
+#     ^ source.typst meta.expr.let.typst variable.other.readwrite.typst
+#      ^ source.typst meta.expr.let.typst
+#       ^^ source.typst meta.expr.let.typst keyword.operator.assignment.typst
+#         ^^^^ source.typst meta.expr.let.typst keyword.other.none.typst
+#             ^ source.typst punctuation.terminator.statement.typst
+>#red = red
+#^ source.typst variable.other.readwrite.hash.typst
+# ^^^ source.typst variable.other.constant.builtin.typst
+#    ^^^^^^^ source.typst
+>#red == red
+#^ source.typst variable.other.readwrite.hash.typst
+# ^^^ source.typst variable.other.constant.builtin.typst
+#    ^^^^^^^^ source.typst
+>#(a = red)
+#^ source.typst keyword.control.hash.typst
+# ^ source.typst meta.brace.round.typst
+#  ^ source.typst variable.other.readwrite.typst
+#   ^ source.typst
+#    ^ source.typst keyword.operator.assignment.typst
+#     ^ source.typst
+#      ^^^ source.typst variable.other.constant.builtin.typst
+#         ^ source.typst meta.brace.round.typst
+>#(red == red)
+#^ source.typst keyword.control.hash.typst
+# ^ source.typst meta.brace.round.typst
+#  ^^^ source.typst variable.other.constant.builtin.typst
+#     ^ source.typst
+#      ^^ source.typst keyword.operator.relational.typst
+#        ^ source.typst
+#         ^^^ source.typst variable.other.constant.builtin.typst
+#            ^ source.typst meta.brace.round.typst
+>
+>#a = red
+#^ source.typst variable.other.readwrite.hash.typst
+# ^ source.typst variable.other.readwrite.typst
+#  ^^^^^^^ source.typst
+>#a += red
+#^ source.typst variable.other.readwrite.hash.typst
+# ^ source.typst variable.other.readwrite.typst
+#  ^^^^^^^^ source.typst
+>#(a += red)
+#^ source.typst keyword.control.hash.typst
+# ^ source.typst meta.brace.round.typst
+#  ^ source.typst variable.other.readwrite.typst
+#   ^ source.typst
+#    ^^ source.typst keyword.operator.assignment.typst
+#      ^ source.typst
+#       ^^^ source.typst variable.other.constant.builtin.typst
+#          ^ source.typst meta.brace.round.typst
+>#not a
+#^ source.typst keyword.control.hash.typst
+# ^^^ source.typst keyword.other.logical.typst
+#    ^^^ source.typst
+>#(not a)
+#^ source.typst keyword.control.hash.typst
+# ^ source.typst meta.brace.round.typst
+#  ^^^ source.typst keyword.other.logical.typst
+#     ^ source.typst
+#      ^ source.typst variable.other.readwrite.typst
+#       ^ source.typst meta.brace.round.typst
+>#(a and red)
+#^ source.typst keyword.control.hash.typst
+# ^ source.typst meta.brace.round.typst
+#  ^ source.typst variable.other.readwrite.typst
+#   ^ source.typst
+#    ^^^ source.typst keyword.other.logical.typst
+#       ^ source.typst
+#        ^^^ source.typst variable.other.constant.builtin.typst
+#           ^ source.typst meta.brace.round.typst
+>#(a or red)
+#^ source.typst keyword.control.hash.typst
+# ^ source.typst meta.brace.round.typst
+#  ^ source.typst variable.other.readwrite.typst
+#   ^ source.typst
+#    ^^ source.typst keyword.other.logical.typst
+#      ^ source.typst
+#       ^^^ source.typst variable.other.constant.builtin.typst
+#          ^ source.typst meta.brace.round.typst
+>#a and red
+#^ source.typst variable.other.readwrite.hash.typst
+# ^ source.typst variable.other.readwrite.typst
+#  ^^^^^^^^^ source.typst

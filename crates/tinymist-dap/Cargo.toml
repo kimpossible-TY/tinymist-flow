@@ -1,0 +1,34 @@
+[package]
+name = "tinymist-dap"
+description = "Fast DAP implementation for typst."
+categories = ["compilers"]
+keywords = ["api", "debugger", "typst"]
+authors.workspace = true
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64.workspace = true
+comemo.workspace = true
+ecow.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tinymist-std.workspace = true
+tinymist-analysis.workspace = true
+tinymist-debug.workspace = true
+tinymist-world = { workspace = true, features = ["system"] }
+typst-library.workspace = true
+typst-layout.workspace = true
+typst-shim.workspace = true
+typst.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[lints]
+workspace = true

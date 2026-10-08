@@ -1,14 +1,28 @@
-# Local build outputs and external dependency binaries.
-/dist/
-/build/
 /target/
+/editors/lapce/target/
+result*
+.direnv
+.envrc
+.nvimlog
+node_modules/
+/local/
+editors/vscode/out/
+editors/lapce/out/
+/external/typst-preview
+/dist
+/build
+
+*.pdf
+.vscode/*.code-workspace
+refs/
+.playwright-mcp/
+.gradle
+
+# Modified by Tinymist Flow: keep local experiments and deployment records private.
 /.local/
 /.worktrees/
-node_modules/
 
-# Local tooling and caches.
+# Python app packaging/test caches.
 __pycache__/
 *.pyc
-*.pdf
 .DS_Store
-.playwright-mcp/

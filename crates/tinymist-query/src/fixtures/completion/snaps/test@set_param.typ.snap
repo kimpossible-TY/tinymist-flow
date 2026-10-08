@@ -1,0 +1,63 @@
+---
+source: crates/tinymist-query/src/completion.rs
+description: Completion on / (35..36)
+expression: "JsonRepr::new_pure(results)"
+input_file: crates/tinymist-query/src/fixtures/completion/set_param.typ
+---
+[
+ {
+  "isIncomplete": false,
+  "items": [
+   {
+    "command": {
+     "command": "tinymist.triggerSuggestAndParameterHints",
+     "title": ""
+    },
+    "kind": 5,
+    "label": "body",
+    "labelDetails": {
+     "description": "content"
+    },
+    "sortText": "002",
+    "textEdit": {
+     "newText": "body: ${1:}",
+     "range": {
+      "end": {
+       "character": 10,
+       "line": 1
+      },
+      "start": {
+       "character": 10,
+       "line": 1
+      }
+     }
+    }
+   },
+   {
+    "command": {
+     "command": "tinymist.triggerSuggestAndParameterHints",
+     "title": ""
+    },
+    "kind": 5,
+    "label": "fill",
+    "labelDetails": {
+     "description": "color"
+    },
+    "sortText": "010",
+    "textEdit": {
+     "newText": "fill: ${1:}",
+     "range": {
+      "end": {
+       "character": 10,
+       "line": 1
+      },
+      "start": {
+       "character": 10,
+       "line": 1
+      }
+     }
+    }
+   }
+  ]
+ }
+]

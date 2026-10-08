@@ -1,0 +1,13 @@
+---
+source: crates/tinymist-query/src/analysis.rs
+expression: result
+input_file: crates/tinymist-query/src/fixtures/type_check/show_raw.typ
+---
+"" = (@it) => @v"it".it
+"it" = Content(raw)
+=====
+26..29 -> Func(raw)
+31..33 -> @it
+31..40 -> @
+37..39 -> @it
+37..40 -> @v"it".it

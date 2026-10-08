@@ -1,0 +1,10 @@
+>a [*a] b
+#^^ source.typst
+#  ^ source.typst markup.content.brace.typst
+#   ^^ source.typst
+#     ^ source.typst markup.content.brace.typst
+#      ^^^ source.typst
+>
+>b
+#^^ source.typst
+>

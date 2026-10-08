@@ -18,3 +18,9 @@
 - [x] 4.3 Remove unrelated tracked engine, editor, fixture, documentation, and release files while preserving Flow sources, licensing, and Git history.
 - [x] 4.4 Verify app tests and isolated build/install/preview delivery from a fresh checkout using an external engine.
 - [x] 4.5 Validate generated documentation and OpenSpec, review the retained tree, and commit and integrate the Flow-only project.
+
+## 5. Integrate preview branch with restored engine ownership
+- [x] 5.1 Restore engine, preview and supporting workspace sources while retaining repository naming and freshly compiled app tests.
+- [x] 5.2 Combine native engine builds with staged external engine packaging, provenance and deferred consent verification.
+- [x] 5.3 Align current source ownership, build documentation and behavior contracts with the restored workspace.
+- [x] 5.4 Validate the integrated tree and complete the merge into main.

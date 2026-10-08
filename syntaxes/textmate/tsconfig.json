@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "module": "es2022",
+    "moduleResolution": "Bundler",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "outDir": "dist",
+    "sourceMap": true,
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["*.ts", "scripts"],
+  "exclude": ["node_modules"]
+}

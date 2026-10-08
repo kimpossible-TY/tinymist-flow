@@ -1,0 +1,51 @@
+---
+source: crates/tinymist-query/src/analysis.rs
+expression: "JsonRepr::new_redacted(result, &REDACT_LOC)"
+input_file: crates/tinymist-query/src/fixtures/lexical_hierarchy/destructing.typ
+---
+{
+ "a@28..29@s0.typ": {
+  "def": {
+   "kind": {
+    "Var": "Variable"
+   },
+   "name": "a",
+   "range": "28:29"
+  },
+  "refs": []
+ },
+ "a@6..7@s0.typ": {
+  "def": {
+   "kind": {
+    "Var": "Variable"
+   },
+   "name": "a",
+   "range": "6:7"
+  },
+  "refs": [
+   "a@40..41"
+  ]
+ },
+ "b@31..32@s0.typ": {
+  "def": {
+   "kind": {
+    "Var": "Variable"
+   },
+   "name": "b",
+   "range": "31:32"
+  },
+  "refs": []
+ },
+ "b@9..10@s0.typ": {
+  "def": {
+   "kind": {
+    "Var": "Variable"
+   },
+   "name": "b",
+   "range": "9:10"
+  },
+  "refs": [
+   "b@37..38"
+  ]
+ }
+}

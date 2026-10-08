@@ -1,0 +1,14 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/ref_bib_no_html.typ
+---
+Range: 3:21:3:34
+
+Bibliography: `Russell:1908` [1]
+
+
+======
+
+
+B. Russell, Mathematical logic based on the theory of types, American Journal of Mathematics, 30, 222–262, 1908.

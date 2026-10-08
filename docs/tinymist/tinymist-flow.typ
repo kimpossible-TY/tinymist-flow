@@ -4,7 +4,7 @@
 
 tinymist-flow manages Typst projects from the menu bar: project settings, preview services, login startup, logs, and recoverable app updates.
 
-This repository contains the native app, packaging, branding, app tests, and documentation. A compatible external tinymist executable supplies document compilation and preview rendering and is copied into each app bundle as `flow-engine`.
+This repository contains the native app, tinymist engine, preview frontend, packaging, branding, tests, and documentation. Packaging accepts a compatible external tinymist executable or builds the maintained engine sources and copies the result into each app bundle as `flow-engine`.
 
 #link("https://github.com/kimpossible-TY/tinymist-flow/issues")[Issues] · #link("docs/tinymist/flow-app.typ")[User guide source] · #link("docs/dev-guide.md")[Development guide]
 
@@ -21,7 +21,9 @@ python3 -m unittest discover -s tests/flow-app -v
 
 For another engine location, pass `--engine /absolute/path/to/flow-engine` or set `FLOW_ENGINE_PATH`. Use a compatible Flow engine with the existing preview features, including `--follow-system-theme`, assistant focus records, and change restoration. Packaging checks the preview CLI before replacing an output bundle.
 
-For a release, pass `--version` with the intended release number and build from a clean commit. The manifest records the Flow source revision, external engine version, input hash, bundled engine hash, and signing mode.
+To build the engine from source, install the workspace Rust and Yarn toolchains, run `node scripts/build.mjs build:preview`, then use `python3 scripts/flow-app.py build --build-engine --jobs 2`. The native build uses ThinLTO and records its build settings in the manifest.
+
+For a release, pass `--version` with the intended release number and build from a clean commit. The manifest records the Flow source revision, engine version, input hash, bundled engine hash, and signing mode.
 
 = Install and use
 
@@ -43,9 +45,12 @@ python3 scripts/flow-app.py rollback
 - `tests/flow-app/`: freshly compiled app configuration tests and packaging recovery checks.
 - `assets/branding/`: app icon and branding source.
 - `docs/tinymist/`: canonical Typst user and developer documentation.
-- `openspec/`: Flow app behavior and workflow contracts.
+- `openspec/`: app, engine, and preview behavior contracts.
+- `crates/`: maintained tinymist engine and protocol implementations.
+- `tools/typst-preview-frontend/` and `tools/typst-dom/`: preview frontend and document rendering.
+- `editors/`: compatible editor integrations.
 
-The engine is an external dependency. Previous engine and editor sources remain available in Git history. The earlier independent repository remains #link("https://github.com/kimpossible-TY/tinymist-flow-archive")[tinymist-flow-archive].
+Engine, preview, and supporting workspace sources are maintained alongside the app. External engine packaging remains available without rebuilding those sources. The earlier independent repository remains #link("https://github.com/kimpossible-TY/tinymist-flow-archive")[tinymist-flow-archive].
 
 README is generated from `docs/tinymist/tinymist-flow.typ`. Use an external `typlite` executable and run `node scripts/link-docs.mjs`; see the development guide for details.
 

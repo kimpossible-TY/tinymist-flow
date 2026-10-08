@@ -1,0 +1,29 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/ref_figure.typ
+---
+Range: 4:21:4:31
+
+Ref: `fig:test1`
+
+
+
+======
+
+
+```typc
+figure(
+  body: [Test1],
+  alt: none,
+  placement: none,
+  scope: "column",
+  caption: none,
+  kind: image,
+  supplement: [Figure],
+  numbering: "1",
+  gap: 0.65em,
+  outlined: true,
+  counter: counter(figure.where(kind: image)),
+)
+```

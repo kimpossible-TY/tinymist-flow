@@ -1,0 +1,4 @@
+*.tmLanguage.json
+dist
+tests/official-testing
+tests/packages

@@ -1,0 +1,19 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/builtin_var2.typ
+---
+Range: 0:20:0:23
+
+```typc
+let sys;
+```
+
+
+======
+
+
+### Sampled Values
+```typc
+<module sys>
+```

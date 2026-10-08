@@ -1,0 +1,26 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/annotate_ret.typ
+---
+Range: 6:20:6:36
+
+```typc
+let _delayed-wrapper(
+  body: any,
+) = content;
+```
+
+
+======
+
+
+
+
+# Positional Parameters
+
+## body
+
+```typc
+type: 
+```

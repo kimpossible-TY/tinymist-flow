@@ -1,0 +1,4 @@
+files.extend-exclude = [
+    "locales/**/*",
+    "editors/vscode/e2e-workspaces/ieee-paper/ieee-tex.typ",
+]

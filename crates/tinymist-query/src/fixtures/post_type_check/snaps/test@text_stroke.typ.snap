@@ -1,0 +1,7 @@
+---
+source: crates/tinymist-query/src/analysis.rs
+description: "Check on \")\" (82)"
+expression: post_ty
+input_file: crates/tinymist-query/src/fixtures/post_type_check/text_stroke.typ
+---
+( ⪰ "cap": ("butt" | "round" | "square") | "dash": ("dash-dotted" | "dashed" | "densely-dash-dotted" | "densely-dashed" | "densely-dotted" | "dotted" | "loosely-dash-dotted" | "loosely-dashed" | "loosely-dotted" | "solid" | {"array": Array<(Float | "dot")>, "phase": Length} | Array<(Float | "dot")>) | "join": ("bevel" | "miter" | "round") | "miter-limit": Float | "paint": Color | "thickness": Length)

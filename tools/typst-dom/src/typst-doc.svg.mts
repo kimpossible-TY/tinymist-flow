@@ -1,0 +1,904 @@
+import { PreviewMode } from "./typst-doc.mjs";
+import { TypstCancellationToken } from "@myriaddreamin/typst.ts/dist/esm/contrib/dom/typst-cancel.mjs";
+import { TypstPatchAttrs, isDummyPatchElem } from "./typst-patch.mjs";
+import type { GConstructor, TypstDocumentContext } from "./typst-doc.mjs";
+import type { CanvasPage, TypstCanvasDocument } from "./typst-doc.canvas.mjs";
+import { patchSvgToContainer } from "./typst-patch.svg.mjs";
+import { ElementPoint, resolveSourceLeaf } from "./typst-debug-info.mjs";
+import { visibleVerticalBounds } from "./visual-viewport.mjs";
+
+export interface TypstSvgDocument {
+  setCursorPaths(paths: ElementPoint[][]): void;
+}
+
+const SVG_RESIZE_ANCHOR_TTL_MS = 600;
+const SVG_SCALE_EPSILON = 1e-6;
+
+interface SvgResizePageAnchor {
+  kind: "page";
+  pageNumber: number;
+  pageLocalY: number;
+  pageHeight: number;
+}
+
+interface SvgResizeGapAnchor {
+  kind: "gap";
+  beforePageNumber?: number;
+  afterPageNumber?: number;
+  gapRatio: number;
+}
+
+type SvgResizeAnchor = SvgResizePageAnchor | SvgResizeGapAnchor;
+
+interface SvgAnchorPage {
+  pageNumber: number;
+  y: number;
+  height: number;
+}
+
+export function provideSvgDoc<
+  TBase extends GConstructor<TypstDocumentContext & Partial<TypstCanvasDocument>>,
+>(Base: TBase): TBase & GConstructor<TypstSvgDocument> {
+  return class SvgDocument extends Base {
+    /// canvas render ctoken
+    canvasRenderCToken?: TypstCancellationToken;
+
+    constructor(...args: any[]) {
+      super(...args);
+      this.registerMode("svg");
+      this.disposeList.push(() => this.clearSvgResizeAnchor());
+    }
+
+    shouldMixinCanvas(): this is TypstCanvasDocument {
+      return !!this.feat$canvas;
+    }
+
+    /// cursor path is a list of element point from root to leaf
+    cursorPaths?: ElementPoint[][] = undefined;
+    /// last applied svg total scale (currentRealScale * currentScaleRatio); used for
+    /// scroll anchoring when the panel/container is resized.
+    private lastSvgScale?: number;
+    /// last currentScaleRatio captured alongside lastSvgScale; used to detect
+    /// whether a scale change came from manual zoom (Ctrl+scroll) or panel resize.
+    private lastSvgScaleRatio?: number;
+    /// document y-coordinate at the top of the viewport for the current resize
+    /// burst. Reused across consecutive resize frames so the anchor is the y
+    /// from before dragging started, not a value re-sampled mid-drag.
+    private svgResizeAnchor?: {
+      contentY: number;
+      scaleRatio: number;
+      viewportAnchor?: SvgResizeAnchor;
+    };
+    private svgResizeAnchorTimeout?: ReturnType<typeof setTimeout>;
+    setCursorPaths(paths: ElementPoint[][]) {
+      this.cursorPaths = paths;
+      this.addViewportChange();
+    }
+
+    postRender$svg() {
+      const docRoot = this.hookedElem.firstElementChild as SVGElement;
+      if (docRoot) {
+        this.windowElem.initTypstSvg(docRoot);
+        this.r.rescale();
+      }
+    }
+
+    rerender$svg() {
+      let patchStr: string;
+      const mode = this.previewMode;
+      if (mode === PreviewMode.Doc) {
+        patchStr = this.fetchSvgDataByDocMode();
+      } else if (mode === PreviewMode.Slide) {
+        patchStr = this.fetchSvgDataBySlideMode();
+      } else {
+        throw new Error(`unknown preview mode ${mode}`);
+      }
+
+      const t2 = performance.now();
+      patchSvgToContainer(this.hookedElem, patchStr, (elem) => this.decorateSvgElement(elem, mode));
+      const t3 = performance.now();
+
+      if (this.cursorPaths) {
+        for (const c of document.querySelectorAll(".typst-svg-cursor")) {
+          c.remove();
+        }
+        console.log("svg post check cursorPaths", this.cursorPaths);
+
+        // Draw cursors by element paths
+        for (const p of this.cursorPaths) {
+          const leaf = resolveSourceLeaf(this.hookedElem, p);
+          if (!leaf) {
+            console.log("svg post check cursorPaths leaf not found", p);
+            continue;
+          }
+          console.log("svg post check cursorPaths leaf", leaf);
+
+          // Finds glyphs in the text element
+          let useIdx = 0;
+          let foundUse: SVGUseElement | undefined = undefined;
+          let foundUseNext: SVGUseElement | undefined = undefined;
+          for (const use of leaf[0].children) {
+            if (use.tagName === "use") {
+              useIdx++;
+              if (useIdx == leaf[1]) {
+                foundUse = use as SVGUseElement;
+              }
+              if (useIdx == leaf[1] + 1) {
+                foundUseNext = use as SVGUseElement;
+                break;
+              }
+            }
+          }
+
+          // Draws cursor at text position
+          // todo: draw cursor for image and shape elements
+          if (foundUse !== undefined) {
+            const g = leaf[0] as SVGGraphicsElement;
+            // const textBase = g.getBBox();
+            const rectBase = foundUse.getBBox();
+            const rectNextBase = foundUseNext?.getBBox();
+            const rect = {
+              // Some char does not have position so they are resolved to 0
+              right: rectBase.width !== 0 ? rectBase.x + rectBase.width : rectNextBase?.x || 0,
+              // todo: have bug
+              // top: textBase.height / 2,
+            };
+
+            // Gets transform matrix
+            const mat = g.getScreenCTM();
+
+            // Calculates correct 5px radius
+            let rx = 5;
+            let ry = 5;
+            const matInv = mat?.inverse();
+            if (matInv) {
+              const sx = matInv.a;
+              const ky = matInv.b;
+              const kx = matInv.c;
+              const sy = matInv.d;
+
+              const rrx = rx * sx + ry * kx;
+              const rry = ry * sy + rx * ky;
+              rx = rrx;
+              ry = rry;
+            }
+            rx = Math.abs(rx);
+            ry = Math.abs(ry);
+
+            // Creates a circle with 5px radius (but regard vertical and horizontal scale)
+            const t = document.createElementNS("http://www.w3.org/2000/svg", "ellipse");
+            t.classList.add("typst-svg-cursor");
+            t.setAttribute("cx", `${rect.right}`);
+            // t.setAttribute('cy', `${rect.top}`);
+            t.setAttribute("rx", `${rx}`);
+            t.setAttribute("ry", `${ry}`);
+            t.setAttribute("fill", "#86C16688");
+            leaf[0].appendChild(t);
+          }
+        }
+      }
+
+      return [t2, t3];
+    }
+
+    private fetchSvgDataBySlideMode() {
+      const pagesInfo = this.kModule.retrievePagesInfo();
+
+      if (pagesInfo.length === 0) {
+        // svg warning
+        return `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-size="20">No page found</text>
+</svg>`;
+      }
+
+      if (this.partialRenderPage >= pagesInfo.length) {
+        this.partialRenderPage = pagesInfo.length - 1;
+      }
+
+      const pageOffset = this.partialRenderPage;
+      let lo = { x: 0, y: 0 },
+        hi = { x: 0, y: 0 };
+      for (let i = 0; i < pageOffset; i++) {
+        const pageInfo = pagesInfo[i];
+        lo.y += pageInfo.height;
+      }
+      const page = pagesInfo[pageOffset];
+      hi.y = lo.y + page.height;
+      hi.x = page.width;
+
+      console.log("render_in_window for slide mode", lo.x, lo.y, hi.x, hi.y);
+
+      // with a bit padding to avoid edge error
+      lo.x += 1e-1;
+      lo.y += 1e-1;
+      hi.x -= 1e-1;
+      hi.y -= 1e-1;
+
+      return this.kModule.renderSvgDiff({
+        window: {
+          lo,
+          hi,
+        },
+      });
+    }
+
+    private fetchSvgDataByDocMode() {
+      if (!this.partialRendering) {
+        return this.kModule.render_in_window(0, 0, 1e33, 1e33);
+      }
+
+      // Use page metadata even on the first frame: missing DOM must never
+      // widen a partial request to the entire document.
+      const pages = this.kModule.retrievePagesInfo();
+      const scroller = this.hookedElem.parentElement!;
+      const maxWidth = Math.max(1, ...pages.map((page) => page.width));
+      const scale = Math.max(
+        1e-6,
+        ((this.cachedDOMState.width || scroller.clientWidth || maxWidth) / maxWidth) *
+          this.currentScaleRatio,
+      );
+      const root = this.hookedElem.firstElementChild;
+      const visible = visibleVerticalBounds(
+        scroller.getBoundingClientRect(),
+        this.hookedElem.ownerDocument.defaultView?.visualViewport,
+      );
+      const top = root
+        ? Math.max(0, (visible.top - root.getBoundingClientRect().top) / scale)
+        : Math.max(0, scroller.scrollTop / scale);
+      // The document element may be hundreds of pages tall. Its clientHeight
+      // is not the viewport height.
+      const bottom = top + Math.max(1, visible.bottom - visible.top) / scale;
+      const gap = (this.isContentPreview ? 6 : 5) / scale;
+      let visualY = 0;
+      let first = -1;
+      let last = -1;
+      for (let i = 0; i < pages.length; i++) {
+        const end = visualY + pages[i].height;
+        if (end >= top && visualY <= bottom) {
+          if (first < 0) first = i;
+          last = i;
+        }
+        visualY = end + (i + 1 < pages.length ? 2 * gap : 0);
+      }
+      if (first < 0) first = last = Math.max(0, pages.length - 1);
+      first = Math.max(0, first - 1);
+      last = Math.min(pages.length - 1, last + 1);
+      let lo = 0;
+      let hi = 0;
+      for (let i = 0; i < pages.length; i++) {
+        if (i < first) lo += pages[i].height;
+        if (i <= last) hi += pages[i].height;
+      }
+      // Offscreen pages remain renderer-owned dummy groups with their size;
+      // SVG diff patching removes their previous content without disturbing
+      // page positions, links, or the renderer's reuse bookkeeping.
+      return this.kModule.render_in_window(0, lo + 0.01, maxWidth, Math.max(lo + 0.02, hi - 0.01));
+    }
+
+    private rescaleSvgOn(svg: SVGElement) {
+      const scale = this.getSvgScaleRatio();
+      if (scale === 0) {
+        console.warn("determine scale as 0, skip rescale");
+        return;
+      }
+
+      // apply scale
+      const dataWidth = Number.parseFloat(svg.getAttribute("data-width")!);
+      const dataHeight = Number.parseFloat(svg.getAttribute("data-height")!);
+      const appliedWidth = (dataWidth * scale).toString();
+      const appliedHeight = (dataHeight * scale).toString();
+      const scaledWidth = Math.ceil(dataWidth * scale);
+      const scaledHeight = Math.ceil(dataHeight * scale);
+
+      // set data applied width and height to memoize change
+      if (svg.getAttribute("data-applied-width") !== appliedWidth) {
+        svg.setAttribute("data-applied-width", appliedWidth);
+        svg.setAttribute("width", `${scaledWidth}`);
+      }
+      if (svg.getAttribute("data-applied-height") !== appliedHeight) {
+        svg.setAttribute("data-applied-height", appliedHeight);
+        svg.setAttribute("height", `${scaledHeight}`);
+      }
+    }
+
+    private clearSvgResizeAnchor() {
+      if (this.svgResizeAnchorTimeout !== undefined) {
+        clearTimeout(this.svgResizeAnchorTimeout);
+        this.svgResizeAnchorTimeout = undefined;
+      }
+      this.svgResizeAnchor = undefined;
+    }
+
+    private keepSvgResizeAnchorAlive() {
+      if (this.svgResizeAnchorTimeout !== undefined) {
+        clearTimeout(this.svgResizeAnchorTimeout);
+      }
+      this.svgResizeAnchorTimeout = setTimeout(() => {
+        this.svgResizeAnchor = undefined;
+        this.svgResizeAnchorTimeout = undefined;
+      }, SVG_RESIZE_ANCHOR_TTL_MS);
+    }
+
+    private collectSvgAnchorPages(svg: SVGElement): SvgAnchorPage[] {
+      return Array.from(svg.children)
+        .filter((elem) => elem.classList.contains("typst-page"))
+        .map((elem) => ({
+          pageNumber: Number.parseInt(elem.getAttribute("data-page-number") || "-1"),
+          y: Number.parseFloat(elem.getAttribute("data-y") || "NaN"),
+          height: Number.parseFloat(elem.getAttribute("data-page-height") || "NaN"),
+        }))
+        .filter(
+          (page) =>
+            Number.isFinite(page.pageNumber) &&
+            Number.isFinite(page.y) &&
+            Number.isFinite(page.height) &&
+            page.height > 0,
+        )
+        .sort((a, b) => a.y - b.y);
+    }
+
+    private resolveSvgDocumentHeight(svg: SVGElement) {
+      const height = Number.parseFloat(
+        svg.getAttribute("data-height") || svg.getAttribute("height") || "NaN",
+      );
+      return Number.isFinite(height) && height > 0 ? height : undefined;
+    }
+
+    private resolveViewportTopY(svg: SVGElement, scrollEl: HTMLElement) {
+      const svgHeight = this.resolveSvgDocumentHeight(svg);
+      if (svgHeight === undefined) {
+        return undefined;
+      }
+
+      const svgRect = svg.getBoundingClientRect();
+      const actualScaleY = svgRect.height / svgHeight;
+      if (!Number.isFinite(actualScaleY) || actualScaleY <= 0) {
+        return undefined;
+      }
+
+      return (scrollEl.getBoundingClientRect().top - svgRect.top) / actualScaleY;
+    }
+
+    private captureViewportTopResizeAnchor(svg: SVGElement, scrollEl: HTMLElement) {
+      const viewportTopY = this.resolveViewportTopY(svg, scrollEl);
+      if (viewportTopY === undefined) {
+        return undefined;
+      }
+
+      const pages = this.collectSvgAnchorPages(svg);
+      const containingPage = pages.find(
+        (page) => viewportTopY >= page.y && viewportTopY <= page.y + page.height,
+      );
+      if (containingPage) {
+        return {
+          kind: "page",
+          pageNumber: containingPage.pageNumber,
+          pageLocalY: viewportTopY - containingPage.y,
+          pageHeight: containingPage.height,
+        } satisfies SvgResizePageAnchor;
+      }
+
+      return this.captureSvgGapAnchor(svg, pages, viewportTopY);
+    }
+
+    private captureSvgGapAnchor(
+      svg: SVGElement,
+      pages: SvgAnchorPage[],
+      viewportTopY: number,
+    ): SvgResizeGapAnchor | undefined {
+      const svgHeight = this.resolveSvgDocumentHeight(svg);
+      if (svgHeight === undefined) {
+        return undefined;
+      }
+
+      let beforePage: SvgAnchorPage | undefined;
+      let afterPage: SvgAnchorPage | undefined;
+      for (const page of pages) {
+        if (viewportTopY < page.y) {
+          afterPage = page;
+          break;
+        }
+        if (viewportTopY > page.y + page.height) {
+          beforePage = page;
+        }
+      }
+
+      const gapStartY = beforePage ? beforePage.y + beforePage.height : 0;
+      const gapEndY = afterPage ? afterPage.y : svgHeight;
+      if (
+        !Number.isFinite(gapStartY) ||
+        !Number.isFinite(gapEndY) ||
+        gapEndY < gapStartY ||
+        viewportTopY < gapStartY ||
+        viewportTopY > gapEndY
+      ) {
+        return undefined;
+      }
+
+      // Store a relative position inside the gap instead of the raw y-coordinate.
+      const gapLength = gapEndY - gapStartY;
+      const gapAnchor: SvgResizeGapAnchor = {
+        kind: "gap",
+        gapRatio:
+          gapLength > 0 ? Math.max(0, Math.min(1, (viewportTopY - gapStartY) / gapLength)) : 0,
+      };
+      if (beforePage) {
+        gapAnchor.beforePageNumber = beforePage.pageNumber;
+      }
+      if (afterPage) {
+        gapAnchor.afterPageNumber = afterPage.pageNumber;
+      }
+      return gapAnchor;
+    }
+
+    private resolveSyntheticYForResizeAnchor(svg: SVGElement, anchor: SvgResizeAnchor) {
+      const pages = this.collectSvgAnchorPages(svg);
+
+      if (anchor.kind === "gap") {
+        const svgHeight = this.resolveSvgDocumentHeight(svg);
+        if (svgHeight === undefined) {
+          return undefined;
+        }
+
+        const beforePage =
+          anchor.beforePageNumber !== undefined
+            ? pages.find((page) => page.pageNumber === anchor.beforePageNumber)
+            : undefined;
+        const afterPage =
+          anchor.afterPageNumber !== undefined
+            ? pages.find((page) => page.pageNumber === anchor.afterPageNumber)
+            : undefined;
+
+        if (
+          (anchor.beforePageNumber !== undefined && beforePage === undefined) ||
+          (anchor.afterPageNumber !== undefined && afterPage === undefined)
+        ) {
+          return undefined;
+        }
+
+        const gapStartY = beforePage ? beforePage.y + beforePage.height : 0;
+        const gapEndY = afterPage ? afterPage.y : svgHeight;
+        if (!Number.isFinite(gapStartY) || !Number.isFinite(gapEndY) || gapEndY < gapStartY) {
+          return undefined;
+        }
+
+        const gapRatio = Math.max(0, Math.min(1, anchor.gapRatio));
+        return gapStartY + gapRatio * (gapEndY - gapStartY);
+      }
+
+      const page = pages.find((page) => page.pageNumber === anchor.pageNumber);
+      if (!page) {
+        return undefined;
+      }
+
+      const pageY = page.y;
+      const pageHeight = page.height;
+      if (anchor.pageHeight <= 0) {
+        return undefined;
+      }
+
+      return pageY + (anchor.pageLocalY * pageHeight) / anchor.pageHeight;
+    }
+
+    // Note: one should retrieve dom state before rescale
+    rescale$svg() {
+      // get dom state from cache, so we are free from layout reflowing
+      const svg = this.hookedElem.firstElementChild as SVGElement;
+      if (!svg) {
+        return;
+      }
+
+      const scale = this.getSvgScaleRatio();
+      if (scale === 0) {
+        console.warn("determine scale as 0, skip rescale");
+        return;
+      }
+
+      // During panel resize, only the auto-fit scale should change
+      // while the user-driven scale ratio does not. Keep the
+      // same viewport-top anchor for the whole resize burst instead of
+      // resampling after each intermediate frame to avoid accumulating jitter.
+      const scrollElement = this.hookedElem.parentElement;
+      const prevScale = this.lastSvgScale;
+      const prevScaleRatio = this.lastSvgScaleRatio;
+      // Manual zoom changes currentScaleRatio and is handled by
+      // installRescaleHandler's cursor-centered scroll adjustment.
+      const scaleRatioChanged =
+        prevScaleRatio !== undefined &&
+        Math.abs(this.currentScaleRatio - prevScaleRatio) >= SVG_SCALE_EPSILON;
+      if (scaleRatioChanged) {
+        this.clearSvgResizeAnchor();
+      }
+      const shouldAnchor =
+        this.previewMode === PreviewMode.Doc &&
+        scrollElement instanceof HTMLElement &&
+        prevScale !== undefined &&
+        prevScale > 0 &&
+        prevScaleRatio !== undefined &&
+        !scaleRatioChanged &&
+        (Math.abs(scale - prevScale) > SVG_SCALE_EPSILON || this.svgResizeAnchor !== undefined);
+
+      let restoreScroll: (() => void) | undefined;
+      if (shouldAnchor) {
+        const scrollEl = scrollElement as HTMLElement;
+        const svgRect = svg.getBoundingClientRect();
+        const containerRect = scrollEl.getBoundingClientRect();
+        const fixedTopOffset = svgRect.top - containerRect.top + scrollEl.scrollTop;
+        const sampledContentY = (scrollEl.scrollTop - fixedTopOffset) / prevScale!;
+        const reusableAnchor =
+          this.svgResizeAnchor &&
+          Math.abs(this.svgResizeAnchor.scaleRatio - this.currentScaleRatio) < SVG_SCALE_EPSILON
+            ? this.svgResizeAnchor
+            : undefined;
+        const contentY = reusableAnchor?.contentY ?? sampledContentY;
+        if (Number.isFinite(contentY)) {
+          // A raw document y-coordinate is enough within page content. In page
+          // margins, use a gap anchor so scale-dependent margin height does not
+          // leak into the restored scroll position.
+          const viewportAnchor =
+            reusableAnchor?.viewportAnchor ?? this.captureViewportTopResizeAnchor(svg, scrollEl);
+          this.svgResizeAnchor = {
+            contentY,
+            scaleRatio: this.currentScaleRatio,
+            viewportAnchor,
+          };
+          this.keepSvgResizeAnchorAlive();
+          restoreScroll = () => {
+            const viewportAnchorY = viewportAnchor
+              ? this.resolveSyntheticYForResizeAnchor(svg, viewportAnchor)
+              : undefined;
+            const targetY = viewportAnchorY ?? contentY;
+            const target = targetY * scale + fixedTopOffset;
+            const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+            scrollEl.scrollTop = Math.max(0, Math.min(max, target));
+          };
+        }
+      }
+
+      // get dom state from cache, so we are free from layout reflowing
+      const container = this.cachedDOMState;
+
+      // apply scale
+      const dataWidth = Number.parseFloat(svg.getAttribute("data-width")!);
+      const dataHeight = Number.parseFloat(svg.getAttribute("data-height")!);
+      const scaledWidth = Math.ceil(dataWidth * scale);
+      const scaledHeight = Math.ceil(dataHeight * scale);
+
+      this.rescaleSvgOn(svg);
+
+      const widthAdjust = Math.max((container.width - scaledWidth) / 2, 0);
+      let transformAttr = "";
+      if (this.previewMode === PreviewMode.Slide) {
+        const heightAdjust = Math.max((container.height - scaledHeight) / 2, 0);
+        transformAttr = `translate(${widthAdjust}px, ${heightAdjust}px)`;
+      } else {
+        transformAttr = `translate(${widthAdjust}px, 0px)`;
+      }
+      if (this.hookedElem.style.transform !== transformAttr) {
+        this.hookedElem.style.transform = transformAttr;
+      }
+
+      // change height of the container back from `installRescaleHandler` hack
+      if (this.hookedElem.style.height) {
+        this.hookedElem.style.removeProperty("height");
+      }
+
+      if (restoreScroll) {
+        restoreScroll();
+      }
+
+      this.lastSvgScale = scale;
+      this.lastSvgScaleRatio = this.currentScaleRatio;
+    }
+
+    private decorateSvgElement(svg: SVGElement, mode: PreviewMode) {
+      const container = this.cachedDOMState;
+      // Partial SVG rendering must leave offscreen pages as placeholders.
+      // Rasterizing every dummy page defeats virtualization and allocates
+      // hundreds of canvas backing stores on mobile browsers.
+      const kShouldMixinCanvas =
+        this.previewMode === PreviewMode.Doc && !this.partialRendering && this.shouldMixinCanvas();
+
+      // the <rect> could only have integer width and height
+      // so we scale it by 100 to make it more accurate
+      const INNER_RECT_UNIT = 100;
+      const INNER_RECT_SCALE = "scale(0.01)";
+
+      /// Calculate width
+      let maxWidth = 0;
+
+      interface SvgPage {
+        elem: Element;
+        width: number;
+        height: number;
+        index: number;
+      }
+
+      const nextPages: SvgPage[] = (() => {
+        /// Retrieve original pages
+        const filteredNextPages = Array.from(svg.children).filter((x) =>
+          x.classList.contains("typst-page"),
+        );
+
+        if (mode === PreviewMode.Doc) {
+          return filteredNextPages;
+        } else if (mode === PreviewMode.Slide) {
+          // already fetched pages info
+          const pageOffset = this.partialRenderPage;
+          return [filteredNextPages[pageOffset]];
+        } else {
+          throw new Error(`unknown preview mode ${mode}`);
+        }
+      })().map((elem, index) => {
+        const width = Number.parseFloat(elem.getAttribute("data-page-width")!);
+        const height = Number.parseFloat(elem.getAttribute("data-page-height")!);
+        maxWidth = Math.max(maxWidth, width);
+        return {
+          index: mode === PreviewMode.Slide ? this.partialRenderPage : index,
+          elem,
+          width,
+          height,
+        };
+      });
+
+      /// Adjust width
+      if (maxWidth < 1e-5) {
+        maxWidth = 1;
+      }
+      // const width = e.getAttribute("width")!;
+      // const height = e.getAttribute("height")!;
+
+      /// Prepare scale
+      // scale derived from svg width and container with.
+      const computedScale = container.width ? container.width / maxWidth : 1;
+      // respect current scale ratio
+      const scale = 1 / (this.currentScaleRatio * computedScale);
+      const fontSize = 12 * scale;
+
+      /// Calculate new width, height
+      // 5pt height margin, 0pt width margin (it is buggy to add width margin)
+      const heightMargin = this.isContentPreview ? 6 * scale : 5 * scale;
+      const widthMargin = 0;
+      const newWidth = maxWidth + 2 * widthMargin;
+
+      /// Apply new pages
+      let accumulatedHeight = 0;
+      const firstPage = (nextPages.length ? nextPages[0] : undefined)!;
+      let firstRect: SVGRectElement = undefined!;
+
+      const pagesInCanvasMode: CanvasPage[] = [];
+      /// Number to canvas page mapping
+      const n2CMapping = new Map<number, CanvasPage>();
+      const createCanvasPageOn = (nextPage: SvgPage) => {
+        const { elem, width, height, index } = nextPage;
+        const pg: CanvasPage = {
+          tag: "canvas",
+          index,
+          width,
+          height,
+          container: undefined!,
+          elem: undefined!,
+          inserter: (pageInfo) => {
+            const foreignObject = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "foreignObject",
+            );
+            elem.appendChild(foreignObject);
+            foreignObject.setAttribute("width", `${width}`);
+            foreignObject.setAttribute("height", `${height}`);
+            foreignObject.classList.add("typst-svg-mixin-canvas");
+            foreignObject.prepend(pageInfo.container);
+          },
+        };
+        n2CMapping.set(index, pg);
+        pagesInCanvasMode.push(pg);
+      };
+
+      for (let i = 0; i < nextPages.length; i++) {
+        /// Retrieve page width, height
+        const nextPage = nextPages[i];
+        const { width: pageWidth, height: pageHeight, elem: pageElem } = nextPage;
+
+        /// Switch a dummy svg page to canvas mode
+        if (kShouldMixinCanvas && isDummyPatchElem(pageElem)) {
+          /// Render this page as canvas
+          createCanvasPageOn(nextPage);
+          pageElem.setAttribute("data-mixin-canvas", "1");
+
+          /// override reuse info for virtual DOM patching
+          ///
+          /// we cannot have much work to do, but we optimistically think of the canvas
+          /// on the same page offset are the same canvas element.
+          const offsetTag = `canvas:${nextPage.index}`;
+          pageElem.setAttribute(TypstPatchAttrs.Tid, offsetTag);
+          pageElem.setAttribute(TypstPatchAttrs.ReuseFrom, offsetTag);
+        }
+
+        /// center the page and add margin
+        const calculatedPaddedX = (newWidth - pageWidth) / 2;
+        const calculatedPaddedY = accumulatedHeight + (i == 0 ? 0 : heightMargin);
+        const translateAttr = `translate(${calculatedPaddedX}, ${calculatedPaddedY})`;
+
+        /// Create inner rectangle
+        const innerRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        innerRect.setAttribute("class", "typst-page-inner");
+        innerRect.setAttribute("data-page-number", `${nextPage.index}`);
+        innerRect.setAttribute("data-page-width", pageWidth.toString());
+        innerRect.setAttribute("data-page-height", pageHeight.toString());
+        innerRect.setAttribute("width", Math.floor(pageWidth * INNER_RECT_UNIT).toString());
+        innerRect.setAttribute("height", Math.floor(pageHeight * INNER_RECT_UNIT).toString());
+        innerRect.setAttribute("x", "0");
+        innerRect.setAttribute("y", "0");
+        innerRect.setAttribute("transform", `${translateAttr} ${INNER_RECT_SCALE}`);
+        if (this.pageColor) {
+          innerRect.setAttribute("fill", this.pageColor);
+        }
+        // It is quite ugly
+        // innerRect.setAttribute("stroke", "black");
+        // innerRect.setAttribute("stroke-width", (2 * INNER_RECT_UNIT * scale).toString());
+        // innerRect.setAttribute("stroke-opacity", "0.4");
+
+        /// Move page to the correct position
+        pageElem.setAttribute("transform", translateAttr);
+        pageElem.setAttribute("data-x", `${calculatedPaddedX}`);
+        pageElem.setAttribute("data-y", `${calculatedPaddedY}`);
+        pageElem.setAttribute("data-page-number", `${nextPage.index}`);
+
+        /// Insert rectangles
+        // todo: this is buggy not preserving order?
+        svg.insertBefore(innerRect, firstPage.elem);
+        if (!firstRect) {
+          firstRect = innerRect;
+        }
+
+        const clipPath = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
+
+        const clipRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+
+        clipRect.setAttribute("x", "0");
+        clipRect.setAttribute("y", "0");
+        clipRect.setAttribute("width", `${pageWidth}`);
+        clipRect.setAttribute("height", `${pageHeight}`);
+        const clipId = `typst-page-clip-${nextPage.index}`;
+        clipPath.appendChild(clipRect);
+        svg.insertBefore(clipPath, firstPage.elem);
+
+        clipPath.setAttribute("id", clipId);
+        pageElem.setAttribute("clip-path", `url(#${clipId})`);
+
+        let pageHeightEnd = pageHeight + (i + 1 === nextPages.length ? 0 : heightMargin);
+
+        if (this.isContentPreview) {
+          // --typst-preview-toolbar-fg-color
+          // create page number indicator
+          // console.log('create page number indicator', scale);
+          const pageNumberIndicator = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "text",
+          );
+          pageNumberIndicator.setAttribute("class", "typst-preview-svg-page-number");
+          pageNumberIndicator.setAttribute("x", "0");
+          pageNumberIndicator.setAttribute("y", "0");
+          const onPaddedX = calculatedPaddedX + pageWidth / 2;
+          const onPaddedY = calculatedPaddedY + pageHeight + heightMargin + fontSize / 2;
+          pageNumberIndicator.setAttribute("transform", `translate(${onPaddedX}, ${onPaddedY})`);
+          pageNumberIndicator.setAttribute("font-size", fontSize.toString());
+          pageNumberIndicator.textContent = `${i + 1}`;
+          svg.append(pageNumberIndicator);
+
+          pageHeightEnd += fontSize;
+        } else {
+          if (this.cursorPosition && this.cursorPosition[0] === i + 1) {
+            const [_, x, y] = this.cursorPosition;
+            const cursor = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            cursor.setAttribute("cx", (x * INNER_RECT_UNIT).toString());
+            cursor.setAttribute("cy", (y * INNER_RECT_UNIT).toString());
+            cursor.setAttribute("r", (5 * scale * INNER_RECT_UNIT).toString());
+            cursor.setAttribute("fill", "#86C166CC");
+            cursor.setAttribute("transform", `${translateAttr} ${INNER_RECT_SCALE}`);
+            svg.appendChild(cursor);
+          }
+        }
+
+        accumulatedHeight = calculatedPaddedY + pageHeightEnd;
+      }
+
+      /// Starts to stole and update canvas elements
+      if (kShouldMixinCanvas) {
+        /// Retrieves original pages
+        for (const prev of this.hookedElem.firstElementChild?.children || []) {
+          if (!prev.classList.contains("typst-page")) {
+            continue;
+          }
+          // nextPage.elem.setAttribute('data-mixin-canvas', 'true');
+          if (prev.getAttribute("data-mixin-canvas") !== "1") {
+            continue;
+          }
+
+          const ch = prev.querySelector(".typst-svg-mixin-canvas");
+          if (ch?.tagName === "foreignObject") {
+            const canvasDiv = ch.firstElementChild as HTMLDivElement;
+
+            const pageNumber = Number.parseInt(canvasDiv.getAttribute("data-page-number")!);
+            const pageInfo = n2CMapping.get(pageNumber);
+            if (pageInfo) {
+              pageInfo.container = canvasDiv as HTMLDivElement;
+              pageInfo.elem = canvasDiv.firstElementChild as HTMLDivElement;
+            }
+          }
+        }
+
+        this.createCanvas(pagesInCanvasMode);
+
+        const ctoken = this.canvasRenderCToken;
+        let waitCancel = Promise.resolve();
+        if (ctoken) {
+          waitCancel = ctoken.cancel().then(() => ctoken.wait());
+          this.canvasRenderCToken = undefined;
+          console.log("cancel canvas rendering");
+        }
+
+        console.assert(
+          this.canvasRenderCToken === undefined,
+          "No!!: canvasRenderCToken should be undefined",
+        );
+
+        const tok = (this.canvasRenderCToken = new TypstCancellationToken());
+
+        renderCanvasWhenIdle(
+          async () => {
+            await waitCancel;
+            this.updateCanvas(pagesInCanvasMode, {
+              cancel: tok,
+              lazy: true,
+            }).finally(() => {
+              if (tok === this.canvasRenderCToken) {
+                this.canvasRenderCToken = undefined;
+              }
+            });
+          },
+          { timeout: 1000 },
+        );
+      }
+
+      if (this.isContentPreview) {
+        accumulatedHeight += fontSize; // always add a bottom margin for last page number
+      }
+
+      /// Apply new width, height
+      const newHeight = accumulatedHeight;
+
+      /// Create outer rectangle
+      if (firstPage) {
+        const rectHeight = Math.ceil(newHeight).toString();
+
+        const outerRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        outerRect.setAttribute("class", "typst-page-outer");
+        outerRect.setAttribute("data-page-width", newWidth.toString());
+        outerRect.setAttribute("data-page-height", rectHeight);
+        outerRect.setAttribute("width", newWidth.toString());
+        outerRect.setAttribute("height", rectHeight);
+        outerRect.setAttribute("x", "0");
+        outerRect.setAttribute("y", "0");
+        // #typst-app already has background
+        outerRect.setAttribute("fill", "none");
+        svg.insertBefore(outerRect, firstRect);
+      }
+
+      /// Update svg width, height information
+      svg.setAttribute("viewBox", `0 0 ${newWidth} ${newHeight}`);
+      svg.setAttribute("width", `${Math.ceil(newWidth)}`);
+      svg.setAttribute("height", `${Math.ceil(newHeight)}`);
+      svg.setAttribute("data-width", `${newWidth}`);
+      svg.setAttribute("data-height", `${newHeight}`);
+
+      /// Early rescale
+      this.rescaleSvgOn(svg);
+    }
+  };
+}
+
+const renderCanvasWhenIdle =
+  "requestIdleCallback" in window
+    ? requestIdleCallback
+    : (cb: (args: void) => void, { timeout }: any) => setTimeout(cb, timeout);

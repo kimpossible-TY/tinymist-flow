@@ -1,0 +1,39 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/annotate_dict_param.typ
+---
+Range: 7:20:7:32
+
+```typc
+let show-example(
+  ..options: arguments,
+  inherited-scope: dictionary = (:),
+) = none;
+```
+
+
+======
+
+
+
+
+# Rest Parameters
+
+## options
+
+```typc
+type: arguments
+```
+
+
+
+# Named Parameters
+
+## inherited-scope
+
+```typc
+type: dictionary
+```
+
+Definitions that are made available to the entire parsed module. This parameter is only used internally.

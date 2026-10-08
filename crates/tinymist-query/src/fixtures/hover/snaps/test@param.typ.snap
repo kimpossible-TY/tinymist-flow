@@ -1,0 +1,16 @@
+---
+source: crates/tinymist-query/src/hover.rs
+expression: content
+input_file: crates/tinymist-query/src/fixtures/hover/param.typ
+---
+Range: 3:25:3:30
+
+```typc
+let param = int;
+```
+
+
+======
+
+
+The `parameter`.

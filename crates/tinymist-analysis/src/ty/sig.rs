@@ -1,0 +1,404 @@
+use typst::foundations::{Func, Value};
+
+use super::BoundChecker;
+use crate::ty::prelude::*;
+
+/// A signature.
+#[derive(Debug, Clone, Copy)]
+pub enum Sig<'a> {
+    /// A builtin signature.        
+    Builtin(BuiltinSig<'a>),
+    /// A type signature.
+    Type(&'a Interned<SigTy>),
+    /// A type constructor.
+    TypeCons {
+        /// The type.
+        val: &'a typst::foundations::Type,
+        /// The original type.
+        at: &'a Ty,
+    },
+    /// An array constructor.
+    ArrayCons(&'a TyRef),
+    /// A tuple constructor.
+    TupleCons(&'a Interned<Vec<Ty>>),
+    /// A dictionary constructor.
+    DictCons(&'a Interned<RecordTy>),
+    /// A value signature.
+    Value {
+        /// The value.
+        val: &'a Func,
+        /// The original type.
+        at: &'a Ty,
+    },
+    /// A partialize signature.
+    Partialize(&'a Sig<'a>),
+    /// A with signature.
+    With {
+        /// The signature.
+        sig: &'a Sig<'a>,
+        /// The bounds.
+        withs: &'a Vec<Interned<ArgsTy>>,
+        /// The original type.
+        at: &'a Ty,
+    },
+}
+
+/// A shape of a signature.
+pub struct SigShape<'a> {
+    /// The signature.
+    pub sig: Interned<SigTy>,
+    /// The withs.
+    pub withs: Option<&'a Vec<Interned<SigTy>>>,
+}
+
+impl<'a> Sig<'a> {
+    /// Gets the type of the signature.
+    pub fn ty(self) -> Option<Ty> {
+        Some(match self {
+            Sig::Builtin(_) => return None,
+            Sig::Type(t) => Ty::Func(t.clone()),
+            Sig::ArrayCons(t) => Ty::Array(t.clone()),
+            Sig::TupleCons(t) => Ty::Tuple(t.clone()),
+            Sig::DictCons(t) => Ty::Dict(t.clone()),
+            Sig::TypeCons { val, .. } => Ty::Builtin(BuiltinTy::Type(*val)),
+            Sig::Value { at, .. } => at.clone(),
+            Sig::With { at, .. } => at.clone(),
+            Sig::Partialize(..) => return None,
+        })
+    }
+
+    /// Gets the shape of the signature.
+    pub fn shape(self, ctx: &mut impl TyCtxMut) -> Option<SigShape<'a>> {
+        let (sig, _is_partialize) = match self {
+            Sig::Partialize(sig) => (*sig, true),
+            sig => (sig, false),
+        };
+
+        let (cano_sig, withs) = match sig {
+            Sig::With { sig, withs, .. } => (*sig, Some(withs)),
+            sig => (sig, None),
+        };
+
+        let sig = match cano_sig {
+            Sig::Builtin(_) => return None,
+            Sig::ArrayCons(arr) => SigTy::array_cons(arr.as_ref().clone(), false),
+            Sig::TupleCons(tup) => SigTy::tuple_cons(tup.clone(), false),
+            Sig::DictCons(dict) => SigTy::dict_cons(dict, false),
+            Sig::TypeCons { val, .. } => ctx.type_of_func(&val.constructor().ok()?)?,
+            Sig::Value { val, .. } => ctx.type_of_func(val)?,
+            // todo
+            Sig::Partialize(..) => return None,
+            Sig::With { .. } => return None,
+            Sig::Type(ty) => ty.clone(),
+        };
+
+        Some(SigShape { sig, withs })
+    }
+}
+
+/// A kind of signature surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigSurfaceKind {
+    /// A call signature.
+    Call,
+    /// An array signature.
+    Array,
+    /// A dictionary signature.
+    Dict,
+    /// An array or dictionary signature.
+    ArrayOrDict,
+}
+
+/// A trait to check a signature.
+pub trait SigChecker: TyCtx {
+    /// Checks the signature.
+    fn check(&mut self, sig: Sig, args: &mut SigCheckContext, pol: bool) -> Option<()>;
+}
+
+impl Ty {
+    /// Iterate over the signatures of the given type.
+    pub fn sig_surface(&self, pol: bool, sig_kind: SigSurfaceKind, checker: &mut impl SigChecker) {
+        let ctx = SigCheckContext {
+            sig_kind,
+            args: Vec::new(),
+            at: TyRef::new(Ty::Any),
+        };
+
+        SigCheckDriver { ctx, checker }.ty(self, pol);
+    }
+
+    /// Get the signature representation of the given type.
+    pub fn sig_repr(&self, pol: bool, ctx: &mut impl TyCtxMut) -> Option<Interned<SigTy>> {
+        // todo: union sig
+        // let mut pos = vec![];
+        // let mut named = HashMap::new();
+        // let mut rest = None;
+        // let mut ret = None;
+
+        let mut primary = None;
+
+        #[derive(BindTyCtx)]
+        #[bind(0)]
+        struct SigReprDriver<'a, C: TyCtxMut>(&'a mut C, &'a mut Option<Interned<SigTy>>);
+
+        impl<C: TyCtxMut> SigChecker for SigReprDriver<'_, C> {
+            fn check(&mut self, sig: Sig, _ctx: &mut SigCheckContext, _pol: bool) -> Option<()> {
+                let sig = sig.shape(self.0)?;
+                *self.1 = Some(sig.sig.clone());
+                Some(())
+            }
+        }
+
+        self.sig_surface(
+            pol,
+            SigSurfaceKind::Call,
+            // todo: bind type context
+            &mut SigReprDriver(ctx, &mut primary),
+        );
+
+        primary
+    }
+}
+
+/// A context to check a signature.
+pub struct SigCheckContext {
+    /// The kind of signature surface.
+    pub sig_kind: SigSurfaceKind,
+    /// The arguments.
+    pub args: Vec<Interned<SigTy>>,
+    /// The type.
+    pub at: TyRef,
+}
+
+/// A driver to check a signature.
+#[derive(BindTyCtx)]
+#[bind(checker)]
+pub struct SigCheckDriver<'a> {
+    ctx: SigCheckContext,
+    checker: &'a mut dyn SigChecker,
+}
+
+impl SigCheckDriver<'_> {
+    /// Determines whether the signature is a function.
+    fn func_as_sig(&self) -> bool {
+        matches!(self.ctx.sig_kind, SigSurfaceKind::Call)
+    }
+
+    /// Determines whether the signature is an array.
+    fn array_as_sig(&self) -> bool {
+        matches!(
+            self.ctx.sig_kind,
+            SigSurfaceKind::Array | SigSurfaceKind::ArrayOrDict
+        )
+    }
+
+    /// Determines whether the signature is a dictionary.
+    fn dict_as_sig(&self) -> bool {
+        matches!(
+            self.ctx.sig_kind,
+            SigSurfaceKind::Dict | SigSurfaceKind::ArrayOrDict
+        )
+    }
+
+    /// Checks the signature of the given type.
+    fn ty(&mut self, at: &Ty, pol: bool) {
+        crate::log_debug_ct!("check sig: {at:?}");
+        match at {
+            Ty::Builtin(BuiltinTy::Stroke) if self.dict_as_sig() => {
+                self.checker
+                    .check(Sig::DictCons(&FLOW_STROKE_DICT), &mut self.ctx, pol);
+            }
+            Ty::Builtin(BuiltinTy::Margin) if self.dict_as_sig() => {
+                self.checker
+                    .check(Sig::DictCons(&FLOW_MARGIN_DICT), &mut self.ctx, pol);
+            }
+            Ty::Builtin(BuiltinTy::Inset) if self.dict_as_sig() => {
+                self.checker
+                    .check(Sig::DictCons(&FLOW_INSET_DICT), &mut self.ctx, pol);
+            }
+            Ty::Builtin(BuiltinTy::Outset) if self.dict_as_sig() => {
+                self.checker
+                    .check(Sig::DictCons(&FLOW_OUTSET_DICT), &mut self.ctx, pol);
+            }
+            Ty::Builtin(BuiltinTy::Radius) if self.dict_as_sig() => {
+                self.checker
+                    .check(Sig::DictCons(&FLOW_RADIUS_DICT), &mut self.ctx, pol);
+            }
+            Ty::Builtin(BuiltinTy::TextFont) if self.dict_as_sig() => {
+                self.checker
+                    .check(Sig::DictCons(&FLOW_TEXT_FONT_DICT), &mut self.ctx, pol);
+            }
+            // todo: deduplicate checking early
+            Ty::Value(ins_ty) => {
+                if self.func_as_sig() {
+                    match &ins_ty.val {
+                        Value::Func(func) => {
+                            self.checker
+                                .check(Sig::Value { val: func, at }, &mut self.ctx, pol);
+                        }
+                        Value::Type(ty) => {
+                            self.checker
+                                .check(Sig::TypeCons { val: ty, at }, &mut self.ctx, pol);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ty::Builtin(BuiltinTy::Type(b_ty)) if self.func_as_sig() => {
+                // todo: distinguish between element and function
+                self.checker
+                    .check(Sig::TypeCons { val: b_ty, at }, &mut self.ctx, pol);
+            }
+            Ty::Builtin(BuiltinTy::Element(elem)) if self.func_as_sig() => {
+                // todo: distinguish between element and function
+                let func = (*elem).into();
+                self.checker
+                    .check(Sig::Value { val: &func, at }, &mut self.ctx, pol);
+            }
+            Ty::Func(sig) if self.func_as_sig() => {
+                self.checker.check(Sig::Type(sig), &mut self.ctx, pol);
+            }
+            Ty::Array(arr) if self.array_as_sig() => {
+                self.checker.check(Sig::ArrayCons(arr), &mut self.ctx, pol);
+            }
+            Ty::Tuple(elems) if self.array_as_sig() => {
+                self.checker
+                    .check(Sig::TupleCons(elems), &mut self.ctx, pol);
+            }
+            Ty::Dict(sig) if self.dict_as_sig() => {
+                // self.check_dict_signature(sig, pol, self.checker);
+                self.checker.check(Sig::DictCons(sig), &mut self.ctx, pol);
+            }
+            Ty::With(sig) if self.func_as_sig() => {
+                self.ctx.args.push(sig.with.clone());
+                self.ty(&sig.sig, pol);
+                self.ctx.args.pop();
+            }
+            Ty::Select(sel) => sel.ty.bounds(
+                pol,
+                &mut MethodDriver {
+                    driver: self,
+                    receiver: sel.ty.as_ref(),
+                    method: &sel.select,
+                },
+            ),
+            // todo: calculate these operators
+            Ty::Unary(_) => {}
+            Ty::Binary(_) => {}
+            Ty::If(_) => {}
+            Ty::Param(param) => {
+                // todo: keep type information
+                self.ty(&param.ty, pol);
+            }
+            _ if at.has_bounds() => at.bounds(pol, self),
+            _ => {}
+        }
+    }
+}
+
+impl BoundChecker for SigCheckDriver<'_> {
+    fn collect(&mut self, ty: &Ty, pol: bool) {
+        crate::log_debug_ct!("sig bounds: {ty:?}");
+        self.ty(ty, pol);
+    }
+}
+
+/// A driver to check a method.
+#[derive(BindTyCtx)]
+#[bind(driver)]
+struct MethodDriver<'a, 'b> {
+    driver: &'a mut SigCheckDriver<'b>,
+    receiver: &'a Ty,
+    method: &'a StrRef,
+}
+
+impl MethodDriver<'_, '_> {
+    fn is_binder(&self) -> bool {
+        matches!(self.method.as_ref(), "with" | "where")
+    }
+
+    fn array_method(&mut self, ty: &Ty, pol: bool) {
+        let method = match self.method.as_ref() {
+            "map" => BuiltinSig::TupleMap(ty),
+            "at" => BuiltinSig::TupleAt(ty),
+            _ => return,
+        };
+        self.driver
+            .checker
+            .check(Sig::Builtin(method), &mut self.driver.ctx, pol);
+    }
+
+    fn arguments_method(&mut self, pol: bool) {
+        let Some(method) = BuiltinSig::arguments_method(self.receiver, self.method.as_ref()) else {
+            return;
+        };
+        self.driver
+            .checker
+            .check(Sig::Builtin(method), &mut self.driver.ctx, pol);
+    }
+}
+
+impl BoundChecker for MethodDriver<'_, '_> {
+    fn collect(&mut self, ty: &Ty, pol: bool) {
+        crate::log_debug_ct!("check method: {ty:?}.{}", self.method.as_ref());
+        match ty {
+            // todo: deduplicate checking early
+            Ty::Value(v) => {
+                match &v.val {
+                    Value::Func(func) => {
+                        if self.is_binder() {
+                            self.driver.checker.check(
+                                Sig::Partialize(&Sig::Value { val: func, at: ty }),
+                                &mut self.driver.ctx,
+                                pol,
+                            );
+                        } else {
+                            // todo: general select operator
+                        }
+                    }
+                    Value::Array(..) => self.array_method(ty, pol),
+                    Value::Args(..) => self.arguments_method(pol),
+                    _ => {}
+                }
+            }
+            Ty::Builtin(BuiltinTy::Element(elem)) => {
+                // todo: distinguish between element and function
+                if self.is_binder() {
+                    let func = (*elem).into();
+                    self.driver.checker.check(
+                        Sig::Partialize(&Sig::Value { val: &func, at: ty }),
+                        &mut self.driver.ctx,
+                        pol,
+                    );
+                } else {
+                    // todo: general select operator
+                }
+            }
+            Ty::Func(sig) => {
+                if self.is_binder() {
+                    self.driver.checker.check(
+                        Sig::Partialize(&Sig::Type(sig)),
+                        &mut self.driver.ctx,
+                        pol,
+                    );
+                } else {
+                    // todo: general select operator
+                }
+            }
+            Ty::With(w) => {
+                self.driver.ctx.args.push(w.with.clone());
+                w.sig.bounds(pol, self);
+                self.driver.ctx.args.pop();
+            }
+            Ty::Tuple(..) => self.array_method(ty, pol),
+            Ty::Array(..) => self.array_method(ty, pol),
+            Ty::Args(..) | Ty::Builtin(BuiltinTy::Args) => self.arguments_method(pol),
+            Ty::If(if_ty) => {
+                self.collect(&if_ty.then, pol);
+                self.collect(&if_ty.else_, pol);
+            }
+            // todo: general select operator
+            _ => {}
+        }
+    }
+}

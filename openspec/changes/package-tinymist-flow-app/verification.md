@@ -43,3 +43,18 @@ Verification passed both in the development tree and a clean shallow checkout of
 - The source commit was integrated into local main by fast-forward.
 
 This extraction does not install or restart the live app. Existing mobile selection, assistant focus, device theme, and change restoration features continue to depend on the compatible external engine. A replacement engine requires compatibility verification; the CLI probe alone cannot establish support for every environment contract. CI compiles current Swift sources and the documentation; real-engine integration remains opt-in through `FLOW_TEST_ENGINE`.
+
+## Preview branch integration — 2026-10-08
+
+The preview activity status branch is integrated with the engine, preview frontend and supporting workspace sources restored at the user’s request. The merge retains the tinymist-flow repository identity, external engine provenance, staged packaging and freshly compiled Swift app tests. Native ThinLTO engine builds and deferred consent verification are also retained. Historical app-only extraction records above describe the earlier layout.
+
+- App unit tests: 14 passed; 2 optional bundle tests skipped in the unit run.
+- Optional external-engine bundle tests: both passed, including signature/provenance, isolated installation and both theme variants through the configured WebSocket origin. The installed engine input hash was preserved.
+- Preview frontend: all 40 tests passed.
+- Restored workspace: locked offline Cargo metadata and cargo fmt --check --all passed.
+- User guide: compiled successfully with the compatible installed engine.
+- The restored typlite binary built successfully offline; README and developer guide were regenerated and scripts/link-docs.mjs --check passed.
+- OpenSpec CLI was unavailable locally; artifact presence and requirement/scenario structure were checked manually.
+- Restored engine, vendor, frontend and preview/performance fixtures match the incoming branch exactly; the merge resolution diff against the incoming branch passed git diff --check. The complete staged restoration retains pre-existing whitespace findings in upstream files and fixtures; those sources were kept unchanged.
+
+No live app installation, service migration or release tag was performed during integration.

@@ -1,0 +1,26 @@
+---
+source: crates/tinymist-query/src/analysis.rs
+expression: result
+input_file: crates/tinymist-query/src/fixtures/type_check/cyclic_scope_deferred.typ
+---
+"a" = Any
+"b" = Any
+"f" = (@flag) => IfTy { cond: @flag, then: 1, else_: IfTy { cond: true, then: "done", else_: Any } }
+"flag" = Any
+"g" = (@flag) => IfTy { cond: @flag, then: "done", else_: Any }
+"flag" = Any
+"use-f" = () => IfTy { cond: false, then: 1, else_: IfTy { cond: true, then: "done", else_: Any } }
+"use-g" = () => IfTy { cond: false, then: "done", else_: Any }
+=====
+0..0 -> @f
+0..0 -> @g
+1..18 -> @a
+17..18 -> @f
+20..37 -> @b
+36..37 -> @g
+44..49 -> @use-f
+54..55 -> @f
+54..62 -> IfTy { cond: false, then: 1, else_: IfTy { cond: true, then: "done", else_: Any } }
+68..73 -> @use-g
+78..79 -> @g
+78..86 -> IfTy { cond: false, then: "done", else_: Any }

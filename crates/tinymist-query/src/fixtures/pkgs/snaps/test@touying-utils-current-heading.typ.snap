@@ -1,0 +1,88 @@
+---
+source: crates/tinymist-query/src/completion.rs
+description: Completion on / (78..79)
+expression: "JsonRepr::new_pure(results)"
+input_file: crates/tinymist-query/src/fixtures/pkgs/touying-utils-current-heading.typ
+---
+[
+ {
+  "isIncomplete": false,
+  "items": [
+   {
+    "command": {
+     "command": "tinymist.triggerSuggestAndParameterHints",
+     "title": ""
+    },
+    "kind": 5,
+    "label": "depth",
+    "labelDetails": {
+     "description": "9999"
+    },
+    "sortText": "000",
+    "textEdit": {
+     "newText": "depth: ${1:}",
+     "range": {
+      "end": {
+       "character": 17,
+       "line": 2
+      },
+      "start": {
+       "character": 17,
+       "line": 2
+      }
+     }
+    }
+   },
+   {
+    "command": {
+     "command": "tinymist.triggerSuggestAndParameterHints",
+     "title": ""
+    },
+    "kind": 5,
+    "label": "hierachical",
+    "labelDetails": {
+     "description": "true"
+    },
+    "sortText": "001",
+    "textEdit": {
+     "newText": "hierachical: ${1:}",
+     "range": {
+      "end": {
+       "character": 17,
+       "line": 2
+      },
+      "start": {
+       "character": 17,
+       "line": 2
+      }
+     }
+    }
+   },
+   {
+    "command": {
+     "command": "tinymist.triggerSuggestAndParameterHints",
+     "title": ""
+    },
+    "kind": 5,
+    "label": "level",
+    "labelDetails": {
+     "description": "auto | int"
+    },
+    "sortText": "002",
+    "textEdit": {
+     "newText": "level: ${1:}",
+     "range": {
+      "end": {
+       "character": 17,
+       "line": 2
+      },
+      "start": {
+       "character": 17,
+       "line": 2
+      }
+     }
+    }
+   }
+  ]
+ }
+]

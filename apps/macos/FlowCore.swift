@@ -127,6 +127,7 @@ func managedByApp(_ p: Profile) -> Bool {
 func agent(_ p: Profile) -> [String: Any] {
     ["Label": p.label, "ProgramArguments": [executable.path, "--serve", p.id],
      "AssociatedBundleIdentifiers": [bundleID], "RunAtLoad": true, "KeepAlive": true, "ThrottleInterval": 10,
+     "ProcessType": "Interactive",
      "WorkingDirectory": support.path, "EnvironmentVariables": p.environment(),
      "StandardOutPath": logRoot.appendingPathComponent("\(p.id).out.log").path,
      "StandardErrorPath": logRoot.appendingPathComponent("\(p.id).err.log").path]
