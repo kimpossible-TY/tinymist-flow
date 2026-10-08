@@ -42,7 +42,7 @@ Preserve native touch text selection and copy menus. Restrict custom document dr
 
 ## Restore the last edited location
 
-Persist the most recent visual edit per project and document variant on the server, including edits made without connected viewers. New and refreshed viewers resume there after rendering. Keep explicit assistant selections separate and preserve reading state during palette changes.
+Persist the most recent visual edit per project and document variant on the server, including edits made without connected viewers. New and refreshed viewers resume there after rendering. Keep explicit assistant selections separate and preserve reading state during palette changes and transport reconnections in an already rendered viewer.
 
 ## Edge-to-edge mobile viewport
 

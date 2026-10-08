@@ -142,6 +142,17 @@ Configured standalone paged preview SHALL persist the last visual edit per proje
 - **THEN** only that new connection receives last-edit restoration
 - **AND** existing viewers retain their reading location
 
+#### Scenario: An existing viewer reconnects
+- **GIVEN** a viewer has rendered the document and the reader has moved away from the saved edit on page 2
+- **WHEN** its connection drops and reconnects without a page reload
+- **THEN** a replayed last-edit hint does not navigate back to page 2 or create a stale change button
+- **AND** the viewer retains its reading position and preview zoom
+- **AND** subsequent live edits still navigate after rendering or expose the deferred button during reader gestures
+
+#### Scenario: Connection fails before the first document renders
+- **WHEN** the initial connection drops before a document renders and a retry receives the saved edit hint
+- **THEN** initial last-edit restoration remains available after the document renders
+
 #### Scenario: No saved history or a palette transition
 - **WHEN** no valid previous snapshot exists
 - **THEN** the first compilation establishes a baseline without guessing an edit

@@ -14,19 +14,21 @@ export function parseChangeLocation(payload: string): ChangeLocation | undefined
   return location as ChangeLocation;
 }
 
-/** Ordered hints wait for rendering; a palette transition retains its reading state. */
+/** Ordered hints wait for rendering; existing viewers retain their reading state. */
 export class ChangeLocationQueue {
   private pending?: ChangeLocation;
+  private hasRendered = false;
   lastLocation?: ChangeLocation;
 
   constructor(private readonly preserveReadingState: boolean) {}
 
   queue(location: ChangeLocation, resume = false): void {
-    if (resume && this.preserveReadingState) return;
+    if (resume && (this.preserveReadingState || this.hasRendered)) return;
     this.pending = location;
   }
 
   clear(): void {
+    // A transport reset does not turn an already rendered viewer into a new one.
     this.pending = undefined;
     this.lastLocation = undefined;
   }
@@ -35,6 +37,7 @@ export class ChangeLocationQueue {
     now: number,
     lastGesture: number,
   ): { location: ChangeLocation; deferred: boolean } | undefined {
+    this.hasRendered = true;
     if (!this.pending) return undefined;
     this.lastLocation = this.pending;
     this.pending = undefined;

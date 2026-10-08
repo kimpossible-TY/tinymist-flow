@@ -40,7 +40,7 @@ For standalone paged preview, enable this with `tinymist preview main.typ --foll
 
 == Resume the last edited location
 
-Managed previews remember the latest successfully rendered visual edit. Edits made while a palette has no viewers are compiled when a viewer returns and then update its remembered position. Opening or refreshing the preview returns to that position after the document renders. A recent reader gesture defers navigation and shows Jump to change (변경 위치로). Switching the document palette keeps the current reading position instead; later live edits still follow their changed locations.
+Managed previews remember the latest successfully rendered visual edit. Edits made while a palette has no viewers are compiled when a viewer returns and then update its remembered position. Opening or refreshing the preview returns to that position after the document renders. A recent reader gesture defers navigation and shows Jump to change (변경 위치로). Switching the document palette or reconnecting an already rendered viewer keeps the current reading position instead; a replayed saved edit does not show a stale jump button, and later live edits still follow their changed locations.
 
 Each profile stores one private `changes/<profile-id>.json` record under the app's Application Support directory, independently of explicit assistant taps. Unchanged output retains its position across service restarts. If output changed while the service was stopped, the first changed page is used instead of stale coordinates. Missing or invalid history establishes a baseline without guessing an earlier edit. Comments or other edits that do not change rendered output do not change the saved position.
 

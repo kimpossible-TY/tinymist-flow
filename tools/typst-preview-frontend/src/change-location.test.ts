@@ -33,6 +33,40 @@ describe("last change restoration", () => {
     expect(queue.afterRender(6000, -Infinity)).toBeUndefined();
     expect(queue.lastLocation).toBeUndefined();
   });
+  it("does not jump back to a saved page 2 after reconnecting a rendered viewer", () => {
+    const queue = new ChangeLocationQueue(false);
+    queue.queue([2, 0, 50], true);
+    expect(queue.afterRender(5000, -Infinity)?.location).toEqual([2, 0, 50]);
+
+    for (let retry = 0; retry < 2; retry++) {
+      queue.clear();
+      queue.queue([2, 0, 50], true);
+      expect(queue.afterRender(6000 + retry * 1000, 5500 + retry * 1000)).toBeUndefined();
+      expect(queue.lastLocation).toBeUndefined();
+    }
+
+    queue.queue([121, 0, 80]);
+    expect(queue.afterRender(9000, -Infinity)).toEqual({
+      location: [121, 0, 80],
+      deferred: false,
+    });
+    queue.queue([122, 0, 40]);
+    expect(queue.afterRender(10000, 9500)?.deferred).toBe(true);
+  });
+  it("preserves a rendered viewer even if its initial document had no saved edit", () => {
+    const queue = new ChangeLocationQueue(false);
+    expect(queue.afterRender(5000, -Infinity)).toBeUndefined();
+    queue.clear();
+    queue.queue([2, 0, 0], true);
+    expect(queue.afterRender(6000, -Infinity)).toBeUndefined();
+  });
+  it("still restores an initial saved edit after a connection fails before rendering", () => {
+    const queue = new ChangeLocationQueue(false);
+    queue.queue([2, 0, 50], true);
+    queue.clear();
+    queue.queue([2, 0, 50], true);
+    expect(queue.afterRender(5000, -Infinity)?.location).toEqual([2, 0, 50]);
+  });
   it("parses only valid positive page coordinates", () => {
     expect(parseChangeLocation("120 0 50")).toEqual([120, 0, 50]);
     for (const invalid of [

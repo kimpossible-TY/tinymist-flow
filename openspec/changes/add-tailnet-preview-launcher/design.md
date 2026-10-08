@@ -86,6 +86,8 @@ Standalone paged preview can opt in with `TINYMIST_PREVIEW_CHANGE_FILE`. Managed
 
 On a connection's first full-current frame, the server sends an ordered `resume,page x y` hint only when its stored fingerprints match that exact document. A shared full-render request from a new viewer must not navigate existing readers. The viewer applies the hint after rendering, with the same gesture deferral as live edits. A theme switch's captured reading state takes priority over this resume hint; later incremental edits still navigate normally. The new document location is independent of scroll position and assistant taps. No new network endpoint or port is added.
 
+The change-location queue retains whether its viewer has completed a document render across transport resets. An already rendered viewer ignores replayed `resume` hints on reconnection, keeping its current scroll and zoom; newly opened or refreshed viewers still restore the saved edit. A failed connection before the first document render must not consume initial restoration. Render callbacks before the current document module is initialized do not consume navigation hints or mark the viewer as rendered. Live `change` hints continue to navigate or expose the deferred button after reconnecting.
+
 ## Explicit selection context for Codex
 
 The standalone CLI optionally accepts `TINYMIST_PREVIEW_FOCUS_FILE`, an absolute local output path. A shared store replaces this file atomically with owner-only permissions. Startup writes a waiting record so a former process's selection cannot appear current. The file contains only the latest selection, not a growing history.

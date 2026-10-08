@@ -248,6 +248,9 @@ export async function wsMain({
     }
     let restoreReadingState = readingState;
     svgDoc.impl.onDidRender = () => {
+      // Viewport callbacks before the first document (or during reconnect) do
+      // not consume initial restoration or hints waiting for that document.
+      if (!svgDoc.impl.moduleInitialized) return;
       updateActivity(() => activity.state.didRender());
       // A viewport render must not adopt a hint before its document frame arrives.
       focusRevision =

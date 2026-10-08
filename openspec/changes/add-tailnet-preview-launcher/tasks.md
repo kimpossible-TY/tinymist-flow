@@ -137,3 +137,12 @@ Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser
 - [x] 18.1 Stop connection initialization and the viewer actor at the first failed WebSocket send, releasing its renderers and viewer demand without polling the failed sink again.
 - [x] 18.2 Validate startup and active-viewer send failures, real abrupt disconnects, reconnects and both-theme document delivery with a warning-free native engine.
 - [ ] 18.3 Package the clean-commit engine, retain recovery and verify stable managed PDE delivery after installation and any renewed macOS consent.
+
+## 19. Preserve reading position on transport reconnection
+
+- [x] 19.1 Reproduce replayed page-2 restoration after a viewer has rendered and reconnects, including a viewer without saved history on initial load.
+- [x] 19.2 Preserve completed-viewer state across connection resets, ignore replayed resume hints, and retain initial restoration plus subsequent live-edit navigation.
+- [x] 19.3 Document reconnect behavior, regenerate preview assets, and validate frontend tests, TypeScript, formatting, generated docs and OpenSpec consistency.
+- [ ] 19.4 Build from a clean fix commit, package and install with recovery, preserve profile running state, and verify installed document delivery and reconnect behavior.
+
+2026-10-08 reconnect verification: the page-2 replay regressions failed before the fix and pass afterward. All 43 frontend and 26 DOM tests, both TypeScript checks, preview build, scoped Prettier checks, guide PDF compilation, generated-doc consistency and strict OpenSpec validation passed. A disposable 20-page browser fixture used the installed compiler backend with the newly built frontend served through an ephemeral loopback proxy. Two actual WebSocket reconnections replayed `resume,2` while scrollTop 6906 and preview scale 1.5 were retained, including a recent gesture without a stale jump button. Subsequent live edits, deferred button navigation and reload restoration passed with no browser errors. Temporary services, browser and fixture files were cleaned up. The installed app and managed profiles were not changed; physical iPhone verification remains separate.
