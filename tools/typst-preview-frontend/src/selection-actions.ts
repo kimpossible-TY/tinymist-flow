@@ -7,6 +7,7 @@ export class SelectionActions {
   private layer = document.createElement("div");
   private selection?: SelectedText;
   private pressedSelection?: SelectedText;
+  private pendingHighlight?: SelectedText;
   private pressing = false;
   private releaseTimer?: ReturnType<typeof setTimeout>;
   private marks: ReviewMarks;
@@ -71,7 +72,8 @@ export class SelectionActions {
       return element;
     };
     this.highlightButton = button("하이라이트", "Highlight", (selected) => {
-      if (selected && this.onAction("highlight", selected)) this.collapse();
+      if (selected && !this.pendingHighlight && this.onAction("highlight", selected))
+        this.pendingHighlight = selected;
     });
     this.saveButton = button("Codex 저장", "Save for Codex", (selected) => {
       if (selected) this.onAction("save", selected);
@@ -101,6 +103,28 @@ export class SelectionActions {
 
   setEnabled(enabled: boolean) {
     this.enabled = enabled;
+    this.updateButtons();
+  }
+
+  highlightFinished(status: string) {
+    const submitted = this.pendingHighlight;
+    this.pendingHighlight = undefined;
+    if (!submitted) return;
+    const current = this.selection;
+    const sameRange =
+      !current ||
+      (current.revision === submitted.revision &&
+        current.text === submitted.text &&
+        current.start.page_no === submitted.start.page_no &&
+        current.start.x === submitted.start.x &&
+        current.start.y === submitted.start.y &&
+        current.end.page_no === submitted.end.page_no &&
+        current.end.x === submitted.end.x &&
+        current.end.y === submitted.end.y);
+    if (sameRange) {
+      if (status === "highlighted" || status === "stale") this.collapse();
+      else this.selection = current ?? submitted;
+    }
     this.updateButtons();
   }
   setDocument(id: string) {
@@ -133,7 +157,7 @@ export class SelectionActions {
     this.highlightButton.hidden = this.saveButton.hidden = this.strikeButton.hidden = !selected;
     const ready =
       this.enabled && !!this.selection?.revision && this.selection.revision === this.readRevision();
-    this.saveButton.disabled = this.highlightButton.disabled = !ready;
+    this.saveButton.disabled = this.highlightButton.disabled = !ready || !!this.pendingHighlight;
     this.undoButton.hidden = this.clearButton.hidden = !this.marks.marks.length;
     this.toolbar.hidden = !selected && !this.marks.marks.length;
     this.position();

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tinymist_preview::PreviewHighlightStatus;
-use typst::syntax::{LinkedNode, Side, Source, SyntaxKind};
+use typst::syntax::{ast, LinkedNode, Side, Source, SyntaxKind};
 
 /// Use the document's helper when it provides math-aware highlighting.
 #[derive(Clone, Copy)]
@@ -128,7 +128,7 @@ pub(super) fn selection_range(
             if root
                 .leaf_at(range.start, Side::After)
                 .is_some_and(|node| editable_context(&node))
-                && reviewable_markup(root.clone(), &range, true)
+                && reviewable_markup(root.clone(), &range, true, false)
                 && contains_equation(root.clone(), &range)
                 && coverage_matches(&range, text, glyphs, true)
             {
@@ -139,6 +139,130 @@ pub(super) fn selection_range(
     matches.sort_unstable_by_key(|range| (range.start, range.end));
     matches.dedup();
     (matches.len() == 1).then(|| matches.remove(0))
+}
+
+/// Reference output can originate in a package rather than at its call site.
+/// These syntax-bounded candidates require a separate marked compiler render;
+/// source spelling or a reference's shared glyph origin cannot verify them.
+pub(super) fn reference_ranges(
+    source: &Source,
+    first: usize,
+    last: usize,
+    glyphs: &[RenderedGlyph],
+    function: HighlightFunction,
+) -> Vec<Range<usize>> {
+    let (first, last) = (first.min(last), first.max(last));
+    if last >= source.text().len()
+        || last - first > 64 * 1024
+        || !source.text().is_char_boundary(first)
+        || !source.text().is_char_boundary(last)
+    {
+        return vec![];
+    }
+    let root = LinkedNode::new(source.root());
+    let Some(first_node) = root.leaf_at(first, Side::After) else {
+        return vec![];
+    };
+    let Some(last_node) = root.leaf_at(last, Side::After) else {
+        return vec![];
+    };
+    if !editable_context(&first_node) {
+        return vec![];
+    }
+    let starts = if let Some(equation) = equation_range(first_node.clone()) {
+        vec![equation.start]
+    } else {
+        let mut starts = vec![first];
+        if let Some(previous) = source.text()[..first].char_indices().last() {
+            if previous.0 >= first_node.offset() {
+                starts.push(previous.0);
+            }
+        }
+        starts
+    };
+    let ends = if let Some(equation) = equation_range(last_node) {
+        vec![equation.end]
+    } else {
+        vec![
+            last,
+            glyphs
+                .iter()
+                .find(|glyph| glyph.offset == last)
+                .map(|glyph| glyph.end)
+                .unwrap_or_else(|| last + source.text()[last..].chars().next().unwrap().len_utf8()),
+        ]
+    };
+    let math = matches!(function, HighlightFunction::MathAware);
+    let mut candidates = vec![];
+    for start in starts {
+        for &end in &ends {
+            if start >= end
+                || end > source.text().len()
+                || !source.text().is_char_boundary(start)
+                || !source.text().is_char_boundary(end)
+            {
+                continue;
+            }
+            let candidate = &source.text()[start..end];
+            let range = (start + candidate.len() - candidate.trim_start().len())
+                ..(end - candidate.len() + candidate.trim_end().len());
+            let mut origins = HashSet::new();
+            let repeated = glyphs
+                .iter()
+                .filter(|glyph| range.contains(&glyph.offset))
+                .any(|glyph| {
+                    // A reference's generated glyphs may all share its call span.
+                    // Literal text and equation origins still must be single-use.
+                    root.leaf_at(glyph.offset, Side::After).is_some_and(|node| {
+                        equation_range(node.clone()).is_some() || node.kind() == SyntaxKind::Text
+                    }) && !origins.insert(glyph.offset)
+                });
+            if !repeated
+                && contains_reference(root.clone(), &range)
+                && reviewable_markup(root.clone(), &range, math, true)
+            {
+                candidates.push(range);
+            }
+        }
+    }
+    candidates.sort_unstable_by_key(|range| (range.start, range.end));
+    candidates.dedup();
+    candidates
+}
+
+fn reference_call(node: &LinkedNode<'_>) -> bool {
+    let Some(call) = node.get().cast::<ast::FuncCall>() else {
+        return false;
+    };
+    let mut callee = call.callee();
+    while let ast::Expr::Parenthesized(expr) = callee {
+        callee = expr.expr();
+    }
+    match callee {
+        ast::Expr::Ident(ident) => ident.as_str() == "ref",
+        ast::Expr::FieldAccess(access) => access.field().as_str() == "ref",
+        _ => false,
+    }
+}
+
+fn contains_reference(node: LinkedNode<'_>, range: &Range<usize>) -> bool {
+    if node.range().end <= range.start || node.offset() >= range.end {
+        return false;
+    }
+    node.kind() == SyntaxKind::Ref
+        || reference_call(&node)
+        || node
+            .children()
+            .any(|child| contains_reference(child, range))
+}
+
+/// Compare complete rendered coverage, allowing mathematical layout order.
+pub(super) fn rendered_reference_matches(rendered: &str, selected: &str, math: bool) -> bool {
+    if math {
+        characters(rendered) == characters(selected)
+    } else {
+        normalize(rendered).0.trim() == normalize(selected).0.trim()
+    }
 }
 
 fn coverage_matches(
@@ -249,7 +373,7 @@ pub(super) fn literal_range(
             let range = (lo + offsets[index].0)..(lo + offsets[index + needle.len() - 1].1);
             (range.contains(&first)
                 && range.contains(&last)
-                && reviewable_markup(LinkedNode::new(source.root()), &range, false))
+                && reviewable_markup(LinkedNode::new(source.root()), &range, false, false))
             .then_some(range)
         });
     let range = matches.next()?;
@@ -276,18 +400,31 @@ fn normalize(text: &str) -> (String, Vec<(usize, usize)>) {
     (result, offsets)
 }
 
-fn reviewable_markup(node: LinkedNode<'_>, range: &Range<usize>, math: bool) -> bool {
+fn reviewable_markup(
+    node: LinkedNode<'_>,
+    range: &Range<usize>,
+    math: bool,
+    references: bool,
+) -> bool {
     if node.range().end <= range.start || node.offset() >= range.end {
         return true;
     }
     if math && node.kind() == SyntaxKind::Equation {
         return range.start <= node.offset() && range.end >= node.range().end;
     }
+    if references && (node.kind() == SyntaxKind::Ref || reference_call(&node)) {
+        return range.start <= node.offset() && range.end >= node.range().end;
+    }
     if node.children().next().is_none() {
+        if references && node.kind() == SyntaxKind::Hash {
+            return node
+                .next_sibling()
+                .is_some_and(|next| reference_call(&next) && range.end >= next.range().end);
+        }
         return matches!(node.kind(), SyntaxKind::Text | SyntaxKind::Space);
     }
     node.children()
-        .all(|child| reviewable_markup(child, range, math))
+        .all(|child| reviewable_markup(child, range, math, references))
 }
 
 /// Construct the candidate source for parse and compiler validation.
@@ -305,6 +442,20 @@ pub(super) fn highlighted_source(
             HighlightFunction::MathAware => "#highlighted[",
         },
     );
+    updated
+}
+
+/// Delimit the candidate output with invisible, compiler-only metadata.
+pub(super) fn marked_highlight_source(
+    source: &Source,
+    range: Range<usize>,
+    function: HighlightFunction,
+    token: &str,
+) -> String {
+    let mut updated = highlighted_source(source, range.clone(), function);
+    let added = updated.len() - source.text().len();
+    updated.insert_str(range.end + added, &format!("#metadata(\"{token}-end\")"));
+    updated.insert_str(range.start, &format!("#metadata(\"{token}-start\")"));
     updated
 }
 
@@ -597,5 +748,53 @@ mod tests {
             "#highlighted[Text $alpha^2$] end."
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn reference_candidates_require_whole_calls_and_compiler_coverage() {
+        let source = Source::detached("Before $v$ in #(s.ref)(\"eq\") after.");
+        let glyphs = make_glyphs(
+            source.text(),
+            &[("Before", "Before "), ("v$", "𝑣"), ("after", "after.")],
+        );
+        let end = source.text().len() - 1;
+        assert!(selection_range(
+            &source,
+            0,
+            end,
+            "Before 𝑣 in Equation (1) after.",
+            &glyphs,
+            HighlightFunction::MathAware
+        )
+        .is_none());
+        assert_eq!(
+            reference_ranges(&source, 0, end, &glyphs, HighlightFunction::MathAware),
+            vec![0..end, 0..end + 1]
+        );
+        assert!(reference_ranges(
+            &source,
+            0,
+            source.text().find("eq").unwrap(),
+            &glyphs,
+            HighlightFunction::MathAware
+        )
+        .is_empty());
+        assert!(reference_ranges(&source, 0, end, &glyphs, HighlightFunction::Standard).is_empty());
+        let unknown = Source::detached("Before #text[other] after.");
+        assert!(reference_ranges(
+            &unknown,
+            0,
+            unknown.text().len() - 1,
+            &[],
+            HighlightFunction::MathAware
+        )
+        .is_empty());
+        let repeated = make_glyphs(
+            source.text(),
+            &[("Before", "Before "), ("Before", "Before ")],
+        );
+        assert!(
+            reference_ranges(&source, 0, end, &repeated, HighlightFunction::MathAware).is_empty()
+        );
     }
 }

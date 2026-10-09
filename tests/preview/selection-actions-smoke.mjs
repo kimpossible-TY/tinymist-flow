@@ -27,8 +27,12 @@ if (math) {
       "body.children",
     );
   await writeFile(resolve(temp, "helpers.typ"), helper);
+  await writeFile(
+    resolve(temp, "references.typ"),
+    await readFile(new URL("./fixtures/scoped-reference.typ", import.meta.url), "utf8"),
+  );
 }
-const source = `${math ? '#import "helpers.typ": highlighted\n#let scope(f) = f(none)\n' : ""}#set page(width: 320pt, height: 440pt, margin: 20pt)
+const source = `${math ? '#import "helpers.typ": highlighted\n#import "references.typ": local-tag-scope\n#let scope(f) = f(none)\n#set math.equation(numbering: "(3.3.1)")\n' : ""}#set page(width: 320pt, height: 440pt, margin: 20pt)
 #set text(size: 14pt, hyphenate: false)
 #let dark = sys.inputs.at("theme", default: "light") == "dark"
 #set page(fill: if dark { rgb("202020") } else { white })
@@ -36,8 +40,9 @@ const source = `${math ? '#import "helpers.typ": highlighted\n#let scope(f) = f(
 The convergent power series is selected for review.
 
 A second sentence for a red strike.
-${math ? "#scope(s => ([Mixed formula $alpha + x$ ends here.]))\n\nStandalone $gamma$ equation.\n\nPartial $beta^2$ formula.\n\n#([Repeated range] * 2)\n" : ""}
+${math ? '#scope(s => ([Mixed formula $alpha + x$ ends here.]))\n\n#scope(s => ([The coefficients $c_(j)$ already describe our angular integral.]))\n\n#local-tag-scope(s => [We therefore need to connect the solution $v$ in #(s.ref)("angular-kernel-series") to that standard function and determine the factor that matches the scale of our angular integral.])\n\nStandalone $gamma$ equation.\n\nPartial $beta^2$ formula.\n\n#([Repeated range] * 2)\n' : ""}
 ${Array.from({ length: 19 }, (_, i) => `#pagebreak()\nAnother page ${i + 2} for virtualization.`).join("\n")}
+${math ? "$ v = x $ <angular-kernel-series>" : ""}
 `;
 await writeFile(file, source);
 const child = spawn(
@@ -286,11 +291,17 @@ try {
       const rejected = async (quote) => {
         const before = await readFile(file, "utf8");
         await select(quote);
+        const selected = await evaluate("document.getSelection().toString()");
         await click("Highlight");
         await wait(
           "document.querySelector('.typst-focus-status').textContent.includes('Cannot safely map')",
         );
         assert.equal(await readFile(file, "utf8"), before);
+        assert.equal(await evaluate("document.getSelection().toString()"), selected);
+        await click("Save for Codex");
+        await poll(async () => (await focus()).selection?.text === selected);
+        await evaluate("document.getSelection().removeAllRanges()");
+        await settle();
       };
       const mathCharacter = async (prefix) =>
         evaluate(`(() => {
@@ -320,6 +331,47 @@ try {
         `document.querySelector('#typst-app .typst-page').getAttribute('data-tid') !== ${JSON.stringify(mixedPage)}`,
       );
       await settle();
+      await select("The coefficients", "integral.");
+      await click("Highlight");
+      await poll(async () =>
+        (await readFile(file, "utf8")).includes(
+          "#highlighted[The coefficients $c_(j)$ already describe our angular integral.]",
+        ),
+      );
+      await settle();
+      await select("We therefore", "integral");
+      await click("Save for Codex");
+      await poll(async () => (await focus()).selection?.text.startsWith("We therefore"));
+      const reference = await focus();
+      assert.match(reference.selection.text, /Equation/);
+      const beforeReference = await readFile(file, "utf8");
+      const mismatched = {
+        ...reference.position,
+        revision: reference.rendered_revision,
+        selection: {
+          ...reference.selection,
+          text: reference.selection.text.replace("Equation", "EquationX"),
+        },
+      };
+      await evaluate(
+        `document.getElementById('typst-container').typstWebsocket.send('src-highlight ' + ${JSON.stringify(JSON.stringify(mismatched))})`,
+      );
+      await wait(
+        "document.querySelector('.typst-focus-status').textContent.includes('Cannot safely map')",
+      );
+      assert.equal(await readFile(file, "utf8"), beforeReference);
+      await click("Highlight");
+      await poll(async () =>
+        (await readFile(file, "utf8")).includes(
+          '#highlighted[We therefore need to connect the solution $v$ in #(s.ref)("angular-kernel-series") to that standard function and determine the factor that matches the scale of our angular integral].',
+        ),
+      );
+      await settle();
+      assert.equal(await evaluate("document.getSelection().toString()"), "");
+      assert.ok(!(await readFile(file, "utf8")).includes("flow-preview-highlight-"));
+      console.log(
+        "Mixed equation and imported reference highlight compiled without saving markers",
+      );
       const equationPage = await evaluate(
         'document.querySelector("#typst-app .typst-page").getAttribute("data-tid")',
       );

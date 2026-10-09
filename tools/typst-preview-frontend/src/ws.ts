@@ -653,6 +653,7 @@ export async function wsMain({
       }
       if (message[0] === "highlight") {
         const result = JSON.parse(dec.decode(message[1] as Uint8Array));
+        selectionActions?.highlightFinished(result.status);
         if (result.status === "highlighted") {
           showFocusStatus(
             "소스에 하이라이트 저장됨 · 컴파일 중",

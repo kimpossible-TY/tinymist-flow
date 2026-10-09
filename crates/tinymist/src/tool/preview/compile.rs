@@ -12,7 +12,7 @@ use tinymist_preview::{
 };
 use tinymist_project::LspCompiledArtifact;
 use tinymist_query::{jump_from_click, jump_from_cursor};
-use typst::introspection::{PagedPosition as Position, Tag};
+use typst::introspection::{MetadataElem, PagedPosition as Position, Tag};
 use typst::layout::{Abs, Frame, FrameItem, Point};
 use typst::model::{Destination, OutlineElem, OutlineEntry};
 use typst::syntax::{FileId, LinkedNode, Source, Span, SyntaxKind};
@@ -164,7 +164,7 @@ impl tinymist_preview::CompileView for PreviewCompileView {
                 &selection.text,
                 &glyphs,
                 function,
-            )?;
+            );
             let path = world.path_for_id(id).ok()?.to_err().ok()?;
             let path = std::fs::canonicalize(path).ok()?;
             let root = std::fs::canonicalize(world.entry_state().workspace_root()?).ok()?;
@@ -174,21 +174,67 @@ impl tinymist_preview::CompileView for PreviewCompileView {
             // A custom helper may fail for a particular body or be unavailable
             // at this lexical position. Validate in an isolated world before
             // committing an edit to the user's document.
-            use crate::world::base::ShadowApi;
-            let mut candidate = world.clone();
-            // Cloning shares the completed world's frozen source database.
-            // Detach it so the compile reads the candidate shadow source.
-            candidate.take_db();
-            let updated = super::highlight::highlighted_source(&source, range.clone(), function);
-            candidate
-                .map_shadow_by_id(id, Bytes::from_string(updated))
-                .ok()?;
-            if typst::compile::<tinymist_std::typst::TypstPagedDocument>(&candidate)
-                .output
-                .is_err()
-            {
-                return None;
-            }
+            let compile = |updated: String| {
+                use crate::world::base::ShadowApi;
+                let mut candidate = world.clone();
+                // Cloning shares the completed world's frozen source database.
+                // Detach it so the compile reads the candidate shadow source.
+                candidate.take_db();
+                candidate
+                    .map_shadow_by_id(id, Bytes::from_string(updated))
+                    .ok()?;
+                typst::compile::<tinymist_std::typst::TypstPagedDocument>(&candidate)
+                    .output
+                    .ok()
+            };
+            let range = if let Some(range) = range {
+                range
+            } else {
+                // References made by imported helpers lose their call-site
+                // glyph origins. Verify each whole-call candidate by rendering
+                // its actual output between invisible metadata markers.
+                let mut verified = None;
+                for range in super::highlight::reference_ranges(
+                    &source,
+                    first_offset,
+                    last_offset,
+                    &glyphs,
+                    function,
+                ) {
+                    let token = format!(
+                        "flow-preview-highlight-{:032x}",
+                        tinymist_std::hash::hash128(&(source.text(), &range))
+                    );
+                    let updated = super::highlight::marked_highlight_source(
+                        &source,
+                        range.clone(),
+                        function,
+                        &token,
+                    );
+                    let Some(document) = compile(updated) else {
+                        continue;
+                    };
+                    let Some(rendered) = marked_highlight_text(&document, &token) else {
+                        continue;
+                    };
+                    if super::highlight::rendered_reference_matches(
+                        &rendered,
+                        &selection.text,
+                        matches!(function, super::highlight::HighlightFunction::MathAware),
+                    ) {
+                        if verified.is_some() {
+                            return None;
+                        }
+                        verified = Some(range);
+                    }
+                }
+                verified?
+            };
+            compile(super::highlight::highlighted_source(
+                &source,
+                range.clone(),
+                function,
+            ))?;
             Some((source, path, range, function))
         };
         let Some((source, path, range, function)) = resolve() else {
@@ -403,6 +449,60 @@ impl tinymist_preview::CompileView for PreviewCompileView {
             end: resolve_off(&source, range.end),
         })
     }
+}
+
+/// Read exactly one marked occurrence, including generated reference text.
+fn marked_highlight_text(
+    document: &tinymist_std::typst::TypstPagedDocument,
+    token: &str,
+) -> Option<String> {
+    struct MarkedText<'a> {
+        start: &'a str,
+        end: &'a str,
+        state: u8,
+        text: String,
+    }
+    fn collect(frame: &Frame, marked: &mut MarkedText<'_>) {
+        for (_, item) in frame.items() {
+            match item {
+                FrameItem::Group(group) => collect(&group.frame, marked),
+                FrameItem::Tag(Tag::Start(elem, _)) => {
+                    if let Some(metadata) = elem.to_packed::<MetadataElem>() {
+                        if let typst::foundations::Value::Str(value) = &metadata.value {
+                            if value.as_str() == marked.start {
+                                marked.state = if marked.state == 0 { 1 } else { 3 };
+                            } else if value.as_str() == marked.end {
+                                marked.state = if marked.state == 1 { 2 } else { 3 };
+                            }
+                        }
+                    }
+                }
+                FrameItem::Text(text) if marked.state == 1 => {
+                    let mut clusters = HashSet::new();
+                    for glyph in &text.glyphs {
+                        if clusters.insert(glyph.range()) {
+                            if let Some(content) = text.text.get(glyph.range()) {
+                                marked.text.push_str(content);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let start = format!("{token}-start");
+    let end = format!("{token}-end");
+    let mut marked = MarkedText {
+        start: &start,
+        end: &end,
+        state: 0,
+        text: String::new(),
+    };
+    for page in document.pages() {
+        collect(&page.frame, &mut marked);
+    }
+    (marked.state == 2 && !marked.text.is_empty()).then_some(marked.text)
 }
 
 #[derive(Default)]

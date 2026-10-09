@@ -124,3 +124,10 @@ The same frontend binary now serves the production HTTPS port 23625. TypeScript/
 - [ ] 16.3 Install with a recovery bundle, preserve each profile's running state and verify the existing PDE HTTPS document and selected-text toolbar.
 
 Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser emulation and transport verification.
+
+## 17. Selected math line mapping regression
+
+- [x] 17.1 Reproduce the reported highlight rejection with script-bearing inline equations and inspect selection coverage and source endpoints.
+- [x] 17.2 Support whole scoped reference calls using compiler-verified output, and retain rejected selections for Codex saving while preserving partial-formula, reused-source, stale and compilation checks.
+- [x] 17.3 Validate the regression in an isolated real preview, run scoped checks and record supported selection limits.
+- [ ] 17.4 Package the verified fix from a clean commit, retain installation recovery and verify the managed PDE document delivery.
