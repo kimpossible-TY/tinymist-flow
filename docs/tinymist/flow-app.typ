@@ -38,6 +38,10 @@ Documents must choose their native palette from `sys.inputs.at("theme", default:
 
 For standalone paged preview, enable this with `tinymist preview main.typ --follow-system-theme`. This overrides an explicit `--input theme=...`; unrelated inputs remain unchanged. Without the flag, preview keeps its existing behavior. HTML and bundle outputs do not support this option. When both palettes have viewers, compiling both variants uses additional host memory and CPU.
 
+== Return from references
+
+Clicking an internal equation, figure or heading reference shows Back to reference (참조 위치로 돌아가기). Use it to return to the reading position immediately before that link; the button then disappears. Following another reference replaces the return destination with the position before that latest link. The return follows the original page position after preview zoom or window resizing and can appear alongside Jump to change. It lasts for the current document view and is cleared when that view is replaced, including a document theme switch or refresh.
+
 == Resume the last edited location
 
 Managed previews remember the latest successfully rendered visual edit. Edits made while a palette has no viewers are compiled when a viewer returns and then update its remembered position. Opening or refreshing the preview returns to that position after the document renders. A recent reader gesture defers navigation and shows Jump to change (변경 위치로). Switching the document palette or reconnecting an already rendered viewer keeps the current reading position instead; a replayed saved edit does not show a stale jump button, and later live edits still follow their changed locations.

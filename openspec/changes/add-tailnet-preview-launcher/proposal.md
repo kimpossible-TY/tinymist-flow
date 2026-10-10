@@ -63,3 +63,7 @@ During installed document delivery verification, a disconnected WebSocket expose
 ## Git fallback for initial focus
 
 When startup cannot restore a valid saved edit, use read-only Git changes against HEAD and untracked compiled sources as candidates. Focus the earliest rendered body page, then its topmost coordinate. Preserve valid saved edits and live-edit navigation. Git absence, clean repositories, ignored/unrelated files and unmappable changes leave the normal initial view.
+
+## Return from a clickable cross-reference
+
+Remember the reading position immediately before an internal document link is followed. Show Back to reference (참조 위치로 돌아가기) beside the existing deferred-change action. Returning restores that position and hides the button. A later reference replaces the single return destination; automatic change navigation and external links do not create one.

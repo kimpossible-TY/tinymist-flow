@@ -1,5 +1,27 @@
 ## ADDED Requirements
 
+### Requirement: Return to the origin of an internal document link
+Paged preview SHALL offer a temporary Back to reference action after following a valid internal document link. It SHALL restore the reading position captured immediately before that link and hide the action after returning. Each later internal link SHALL replace the single return destination. The action SHALL remain separate from deferred change navigation.
+
+#### Scenario: Follow and return from a reference
+- **WHEN** a reader follows an equation, figure, heading or other internal document link
+- **THEN** the preview remembers the originating reading position and shows Back to reference
+- **WHEN** the reader activates Back to reference
+- **THEN** the preview restores the originating page and viewport offset, including after preview zoom or viewport resizing
+- **AND** the return button disappears and cannot repeat the consumed return
+
+#### Scenario: Follow another reference
+- **WHEN** a reader follows a second internal link before returning
+- **THEN** the button returns to the position immediately before the second link
+- **AND** returning consumes that destination without exposing an older one
+
+#### Scenario: Independent navigation and lifetime
+- **WHEN** an external link, editor navigation or automatic change navigation occurs
+- **THEN** it does not create or replace a reference return destination
+- **AND** a deferred change action can be shown alongside the return button without overlap
+- **WHEN** the active renderer is disposed or replaced
+- **THEN** its return button and saved origin are discarded
+
 ### Requirement: Mobile preview fills the available viewport
 Document preview SHALL opt into edge-to-edge mobile layout without adding safe-area padding around the document or changing authored page margins. It SHALL follow dynamic viewport height and settled scrollport size while preserving existing reading anchors, explicit zoom, native pinch zoom, and safe control/feedback positioning.
 

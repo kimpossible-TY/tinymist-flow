@@ -1,3 +1,9 @@
+## Return from a clickable cross-reference
+
+Wrap only the renderer's global `window.handleTypstLocation` entry point for internal links. Keep the container handler used for editor navigation unchanged. Validate that the clicked element and destination page belong to the active paged document before capturing the origin. Save the page number and normalized offsets at the scrollport origin so preview zoom or viewport resizing does not turn the return into a different passage. Restore with an instant scroll and request viewport rendering, then consume the single origin and hide the button. Following another link replaces the origin. A transport reconnection retains it while the renderer lives; renderer disposal, including a theme replacement, removes the action and restores the original global handler.
+
+Put the return and deferred-change buttons in a shared vertical action group that respects safe-area insets and focus feedback, avoiding overlapping controls. Treat a return as a reader gesture so a simultaneous live edit can defer its navigation. Temporarily suppress browser scroll anchoring while the returned virtual page is populated, and restore the previous style after the completed render has painted or on disposal. Native touch tap forwarding already invokes the same internal-link handler; selection and long presses keep their existing behavior. This is a preview control and does not change exported PDF links.
+
 ## Context
 
 The preview data plane already accepts an explicit listen address through `--data-plane-host`. The preview frontend connects its WebSocket to the current page origin, and the server accepts that connection when the browser origin exactly matches the configured listen host and actual port. Consequently, binding with a host's Tailscale MagicDNS name provides both the required transport and a stable browser URL.

@@ -65,11 +65,22 @@ body {
   position: relative;
 }
 
-.typst-change-jump {
+.typst-navigation-actions {
   position: fixed;
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
   z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.typst-change-jump,
+.typst-reference-back {
+  pointer-events: auto;
+  cursor: pointer;
   border: 0;
   border-radius: 999px;
   padding: 11px 16px;
@@ -81,7 +92,8 @@ body {
   box-shadow: 0 3px 14px #0005;
 }
 
-.typst-change-jump[hidden] {
+.typst-change-jump[hidden],
+.typst-reference-back[hidden] {
   display: none;
 }
 
@@ -93,7 +105,9 @@ body {
   right: max(12px, env(safe-area-inset-right));
   z-index: 20;
   width: fit-content;
-  max-width: calc(100% - max(12px, env(safe-area-inset-left)) - max(12px, env(safe-area-inset-right)));
+  max-width: calc(
+    100% - max(12px, env(safe-area-inset-left)) - max(12px, env(safe-area-inset-right))
+  );
   margin: 0 auto;
   border-radius: 12px;
   padding: 7px 12px;
@@ -107,7 +121,7 @@ body {
   pointer-events: none;
 }
 
-body:has(.typst-focus-status) .typst-change-jump {
+body:has(.typst-focus-status) .typst-navigation-actions {
   bottom: calc(72px + env(safe-area-inset-bottom));
 }
 

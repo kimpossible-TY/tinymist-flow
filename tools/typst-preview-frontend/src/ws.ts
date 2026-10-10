@@ -21,6 +21,7 @@ import { ChangeLocationQueue, parseChangeLocation, type ChangeLocation } from ".
 import { focusStatusPlacement } from "./mobile-viewport";
 import { SelectionActions } from "./selection-actions";
 import { PreviewActivity } from "./preview-activity";
+import { ReferenceNavigation } from "./reference-navigation";
 export { PreviewMode } from "typst-dom/typst-doc.mjs";
 
 // for debug propose
@@ -138,6 +139,9 @@ export async function wsMain({
     if (previewMode === PreviewMode.Doc && !isContentPreview) {
       const changedLocations = new ChangeLocationQueue(Boolean(readingState));
       let lastUserGesture = -Infinity;
+      const navigationActions = document.createElement("div");
+      navigationActions.className = "typst-navigation-actions";
+      document.body.appendChild(navigationActions);
       const changeButton = document.createElement("button");
       changeButton.type = "button";
       changeButton.className = "typst-change-jump";
@@ -145,7 +149,7 @@ export async function wsMain({
         ? "변경 위치로"
         : "Jump to change";
       changeButton.hidden = true;
-      document.body.appendChild(changeButton);
+      navigationActions.appendChild(changeButton);
 
       const jumpToChange = ([page, , y]: [number, number, number]) => {
         const rect = hookedElem.querySelector<SVGRectElement>(
@@ -179,6 +183,16 @@ export async function wsMain({
       const markUserGesture = () => {
         lastUserGesture = performance.now();
       };
+      const referenceNavigation = new ReferenceNavigation(
+        resizeTarget,
+        hookedElem,
+        navigationActions,
+        markUserGesture,
+        () => {
+          markUserGesture();
+          svgDoc.addViewportChange();
+        },
+      );
       resizeTarget.addEventListener("pointerdown", markUserGesture, { passive: true });
       resizeTarget.addEventListener("touchmove", markUserGesture, { passive: true });
       resizeTarget.addEventListener("wheel", markUserGesture, { passive: true });
@@ -192,6 +206,7 @@ export async function wsMain({
         changeButton.hidden = true;
       };
       svgDoc.impl.onDidRender = () => {
+        referenceNavigation.afterRender();
         const change = changedLocations.afterRender(performance.now(), lastUserGesture);
         if (!change) return;
         if (change.deferred) {
@@ -202,7 +217,8 @@ export async function wsMain({
         }
       };
       svgDoc.impl.disposeList.push(() => {
-        changeButton.remove();
+        referenceNavigation.dispose();
+        navigationActions.remove();
         resizeTarget.removeEventListener("pointerdown", markUserGesture);
         resizeTarget.removeEventListener("touchmove", markUserGesture);
         resizeTarget.removeEventListener("wheel", markUserGesture);
