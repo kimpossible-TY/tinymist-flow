@@ -69,7 +69,7 @@ def signing_certificate(path):
     """Return public certificate fingerprints without exporting its private key."""
     with tempfile.TemporaryDirectory(prefix='flow-cert-') as tmp:
         prefix = Path(tmp) / 'certificate'
-        run(['/usr/bin/codesign', '--display', '--extract-certificates', prefix, path], capture_output=True)
+        run(['/usr/bin/codesign', '--display', '--extract-certificates=' + str(prefix), path], capture_output=True)
         leaf = Path(str(prefix) + '0')
         if not leaf.exists(): return None
         data = leaf.read_bytes()
