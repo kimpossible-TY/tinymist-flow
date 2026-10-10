@@ -55,3 +55,5 @@ Add a web toolbar for a native text range: save its exact text and endpoints in 
 Prefer the document's callable `highlighted` helper when present, including text-only selections, to retain authored math backgrounds and theme colors. Support complete equations mixed with text through source syntax and rendered glyph coverage; reject partial formulas and reused source slices.
 
 Support complete inline references (`@label`, `ref(...)` and scoped `.ref(...)`) within selections anchored in source text or equations. Verify generated reference output using invisible markers in an isolated candidate render, retaining whole-call syntax and single-occurrence checks. Keep rejected selections available for Save for Codex and dismiss a successful highlight only after server acknowledgment.
+
+During installed document delivery verification, a disconnected WebSocket exposed repeated sends to a failed one-use sink adapter, aborting the native engine. Stop the connection on its first send error so refreshes, palette transitions and interrupted mobile connections release their rendering tasks and preserve service availability.

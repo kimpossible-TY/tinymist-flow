@@ -121,7 +121,7 @@ The same frontend binary now serves the production HTTPS port 23625. TypeScript/
 
 - [x] 16.1 Back up and patch the canonical and installed text-utils helpers to support singleton content; compile text, math and mixed ranges against the real package.
 - [x] 16.2 Build a clean-commit native engine, package it with the clean Flow-only app tooling and validate its signature and external-engine provenance.
-- [ ] 16.3 Install with a recovery bundle, preserve each profile's running state and verify the existing PDE HTTPS document and selected-text toolbar.
+- [x] 16.3 Install with a recovery bundle, preserve each profile's running state and verify the existing PDE HTTPS document and selected-text toolbar.
 
 Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser emulation and transport verification.
 
@@ -130,4 +130,10 @@ Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser
 - [x] 17.1 Reproduce the reported highlight rejection with script-bearing inline equations and inspect selection coverage and source endpoints.
 - [x] 17.2 Support whole scoped reference calls using compiler-verified output, and retain rejected selections for Codex saving while preserving partial-formula, reused-source, stale and compilation checks.
 - [x] 17.3 Validate the regression in an isolated real preview, run scoped checks and record supported selection limits.
-- [ ] 17.4 Package the verified fix from a clean commit, retain installation recovery and verify the managed PDE document delivery.
+- [x] 17.4 Package the verified fix from a clean commit, retain installation recovery and verify the managed PDE document delivery.
+
+## 18. Disconnect recovery discovered during deployment
+
+- [x] 18.1 Stop connection initialization and the viewer actor at the first failed WebSocket send, releasing its renderers and viewer demand without polling the failed sink again.
+- [ ] 18.2 Validate startup and active-viewer send failures, real abrupt disconnects, reconnects and both-theme document delivery with a warning-free native engine.
+- [ ] 18.3 Package the clean-commit engine, retain recovery and verify stable managed PDE delivery after installation and any renewed macOS consent.

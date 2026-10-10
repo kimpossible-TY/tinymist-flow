@@ -78,6 +78,19 @@ Partial document preview SHALL retain continuous scroll geometry while rendering
 - **THEN** only the visible range and adjacent pages are requested, including on initial load without existing page DOM
 - **AND** offscreen page contents are removed by renderer diff patches while their dimensions remain
 
+### Requirement: Disconnected viewers do not abort the preview service
+The server SHALL stop using a viewer's WebSocket at the first outgoing send failure and release that connection's rendering tasks and viewer demand. Other viewers and subsequent connections SHALL continue to receive documents.
+
+#### Scenario: A viewer disconnects during initialization
+- **WHEN** sending a configuration or initial compiler-status frame fails
+- **THEN** the connection ends without another send on the failed sink
+- **AND** no viewer demand or renderer task remains owned by that connection
+
+#### Scenario: A viewer disconnects during document or action delivery
+- **WHEN** sending a document, status, focus, highlight, navigation or pong frame fails
+- **THEN** the viewer actor ends and its connection-owned renderers are stopped
+- **AND** the engine remains available for other viewers and reconnects
+
 ### Requirement: Follow a changed document location
 On a successful incremental compilation that changes paged output, document preview SHALL navigate to the changed source position when it maps to a changed page, or to the first changed page otherwise. It SHALL wait until the new document is rendered and jump without scrolling through intermediate pages. A recent direct scroll gesture SHALL defer navigation and expose a button to perform it.
 

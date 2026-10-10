@@ -102,9 +102,17 @@ where
         }
     }
 
-    async fn record_focus(&mut self, payload: &str) {
+    async fn send_message(&mut self, message: WsMessage, label: &'static str) -> bool {
+        self.webview_websocket_conn
+            .send(message)
+            .await
+            .log_error(label)
+            .is_some()
+    }
+
+    async fn record_focus(&mut self, payload: &str) -> bool {
         let Some((store, view)) = self.focus.as_ref() else {
-            return;
+            return true;
         };
         let request = if payload.len() <= 48 * 1024 {
             serde_json::from_str::<FocusRequest>(payload)
@@ -135,13 +143,14 @@ where
         } else {
             serde_json::json!({"status": "invalid"})
         };
-        self.webview_websocket_conn
-            .send(WsMessage::Binary(format!("focus,{response}").into()))
-            .await
-            .log_error("SendPreviewFocus");
+        self.send_message(
+            WsMessage::Binary(format!("focus,{response}").into()),
+            "SendPreviewFocus",
+        )
+        .await
     }
 
-    async fn highlight_selection(&mut self, payload: &str) {
+    async fn highlight_selection(&mut self, payload: &str) -> bool {
         let request = (payload.len() <= 48 * 1024)
             .then(|| serde_json::from_str::<FocusRequest>(payload).ok())
             .flatten()
@@ -172,53 +181,62 @@ where
             (None, _) => serde_json::json!({"status": "unsupported"}),
             _ => serde_json::json!({"status": "invalid"}),
         };
-        self.webview_websocket_conn
-            .send(WsMessage::Binary(format!("highlight,{response}").into()))
-            .await
-            .log_error("SendPreviewHighlight");
+        self.send_message(
+            WsMessage::Binary(format!("highlight,{response}").into()),
+            "SendPreviewHighlight",
+        )
+        .await
     }
 
-    async fn send_compile_status(&mut self) {
+    async fn send_compile_status(&mut self) -> bool {
         let status = *self.compile_status.borrow_and_update();
-        let Some(status) = status else { return };
+        let Some(status) = status else { return true };
         let status = match status {
             CompileStatus::Compiling => "compiling",
             CompileStatus::CompileSuccess => "success",
             CompileStatus::CompileError => "error",
         };
-        self.webview_websocket_conn
-            .send(WsMessage::Binary(format!("compile-status,{status}").into()))
-            .await
-            .log_error("SendPreviewCompileStatus");
+        self.send_message(
+            WsMessage::Binary(format!("compile-status,{status}").into()),
+            "SendPreviewCompileStatus",
+        )
+        .await
     }
 
     pub async fn run(mut self) {
-        self.send_compile_status().await;
+        if !self.send_compile_status().await {
+            return;
+        }
         loop {
             tokio::select! {
                 Ok(()) = self.compile_status.changed() => {
-                    self.send_compile_status().await;
+                    if !self.send_compile_status().await {
+                        break;
+                    }
                 }
                 Ok(msg) = self.mailbox.recv() => {
                     log::trace!("WebviewActor: received message from mailbox: {msg:?}");
                     match msg {
                         WebviewActorRequest::SrcToDocJump(jump_info) => {
                             let msg = positions_req("jump", jump_info);
-                            self.webview_websocket_conn.send(WsMessage::Binary(msg.into()))
-                              .await.log_error("WebViewActor");
+                            if !self.send_message(WsMessage::Binary(msg.into()), "WebViewActor").await {
+                                break;
+                            }
                         }
                         WebviewActorRequest::ViewportPosition(jump_info) => {
                             let msg = position_req("viewport", jump_info);
-                            self.webview_websocket_conn.send(WsMessage::Binary(msg.into()))
-                              .await.log_error("WebViewActor");
+                            if !self.send_message(WsMessage::Binary(msg.into()), "WebViewActor").await {
+                                break;
+                            }
                         }
                     }
                 }
                 Some(svg) = self.svg_receiver.recv() => {
                     log::trace!("WebviewActor: received svg from renderer");
                     let _scope = typst_timing::TimingScope::new("webview_actor_send_svg");
-                    self.webview_websocket_conn.send(WsMessage::Binary(svg.into()))
-                    .await.log_error("WebViewActor");
+                    if !self.send_message(WsMessage::Binary(svg.into()), "WebViewActor").await {
+                        break;
+                    }
                 }
                 msg = self.webview_websocket_conn.next() => {
                     let Some(msg) = msg else {
@@ -232,7 +250,9 @@ where
                     let msg = match msg {
                         WsMessage::Text(msg) => msg,
                         WsMessage::Ping(msg) => {
-                            let _ = self.webview_websocket_conn.send(WsMessage::Pong(msg)).await;
+                            if !self.send_message(WsMessage::Pong(msg), "WebViewActor").await {
+                                break;
+                            }
                             continue;
                         },
                         WsMessage::Pong(..) => {
@@ -265,12 +285,16 @@ where
                         self.broadcast_sender.send(WebviewActorRequest::ViewportPosition(pos)).log_error("WebViewActor");
                     } else if let Some(path) = msg.strip_prefix("src-point ") {
                         if self.focus.is_some() {
-                            self.record_focus(path).await;
+                            if !self.record_focus(path).await {
+                                break;
+                            }
                         } else if let Ok(path) = serde_json::from_str(path) {
                             self.render_sender.send(RenderActorRequest::WebviewResolveFrameLoc(path)).log_error("WebViewActor");
                         }
                     } else if let Some(selection) = msg.strip_prefix("src-highlight ") {
-                        self.highlight_selection(selection).await;
+                        if !self.highlight_selection(selection).await {
+                            break;
+                        }
                     } else if let Some(state) = msg.strip_prefix("viewer-window-state ") {
                         if let Ok(state) = serde_json::from_str::<ViewerWindowStateMessage>(state) {
                             self.editor_sender.send(EditorActorRequest::ViewerWindowState(state)).log_error("WebViewActor");

@@ -174,22 +174,34 @@ impl Previewer {
                 let mut render_tasks = tokio::task::JoinSet::new();
                 tokio::pin!(conn);
 
-                if h.enable_partial_rendering {
-                    conn.send(WsMessage::Binary("partial-rendering,true".into()))
+                if h.enable_partial_rendering
+                    && conn
+                        .send(WsMessage::Binary("partial-rendering,true".into()))
                         .await
-                        .log_error("SendPartialRendering");
+                        .log_error("SendPartialRendering")
+                        .is_none()
+                {
+                    return;
                 }
-                if h.focus_store.is_some() {
-                    conn.send(WsMessage::Binary("focus-enabled,true".into()))
+                if h.focus_store.is_some()
+                    && conn
+                        .send(WsMessage::Binary("focus-enabled,true".into()))
                         .await
-                        .log_error("SendFocusEnabled");
+                        .log_error("SendFocusEnabled")
+                        .is_none()
+                {
+                    return;
                 }
-                if !h.invert_colors.is_empty() {
-                    conn.send(WsMessage::Binary(
-                        format!("invert-colors,{}", h.invert_colors).into(),
-                    ))
-                    .await
-                    .log_error("SendInvertColor");
+                if !h.invert_colors.is_empty()
+                    && conn
+                        .send(WsMessage::Binary(
+                            format!("invert-colors,{}", h.invert_colors).into(),
+                        ))
+                        .await
+                        .log_error("SendInvertColor")
+                        .is_none()
+                {
+                    return;
                 }
                 let actor::webview::Channels { svg } =
                     actor::webview::WebviewActor::<'_, C>::set_up_channels();
@@ -453,7 +465,10 @@ pub type SourceLocation = reflexo_typst::debug_loc::SourceLocation;
 #[cfg(test)]
 mod tests {
     use std::pin::Pin;
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use std::task::{Context, Poll};
 
     use futures::{Sink, Stream};
@@ -503,6 +518,53 @@ mod tests {
 
         fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             Poll::Ready(Ok(()))
+        }
+    }
+
+    struct FailingSocket {
+        socket: TestSocket,
+        sent: usize,
+        fail_after: usize,
+        failures: Arc<AtomicUsize>,
+    }
+
+    impl Stream for FailingSocket {
+        type Item = Result<WsMessage, reflexo_typst::Error>;
+
+        fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Pin::new(&mut self.socket).poll_next(cx)
+        }
+    }
+
+    impl Sink<WsMessage> for FailingSocket {
+        type Error = reflexo_typst::Error;
+
+        fn poll_ready(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            if self.sent >= self.fail_after {
+                self.failures.fetch_add(1, Ordering::SeqCst);
+                Poll::Ready(Err(error_once!("test disconnected socket")))
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        fn start_send(mut self: Pin<&mut Self>, message: WsMessage) -> Result<(), Self::Error> {
+            self.sent += 1;
+            Pin::new(&mut self.socket).start_send(message)
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Pin::new(&mut self.socket).poll_flush(cx)
+        }
+
+        fn poll_close(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Result<(), Self::Error>> {
+            Pin::new(&mut self.socket).poll_close(cx)
         }
     }
 
@@ -566,6 +628,88 @@ mod tests {
         drop(incoming_tx);
         previewer.stop().await;
         previewer.join().await;
+    }
+
+    #[tokio::test]
+    async fn send_failure_releases_connection_without_polling_failed_sink_again() {
+        for (fail_after, trigger) in [
+            (0, "startup"),
+            (1, "startup"),
+            (2, "startup"),
+            (3, "compile"),
+            (3, "ping"),
+            (3, "highlight"),
+            (3, "viewport"),
+        ] {
+            let (demand_tx, mut demand_rx) = mpsc::unbounded_channel();
+            let builder = super::PreviewBuilder::new(super::PreviewConfig {
+                enable_partial_rendering: true,
+                invert_colors: "auto".into(),
+                ..super::PreviewConfig::default()
+            })
+            .with_viewer_demand(move |active| {
+                demand_tx.send(active).unwrap();
+            });
+            let watcher = builder.compile_watcher("failed-send-test".into()).clone();
+            watcher.status(super::CompileStatus::CompileError);
+            let renderer = builder.renderer_mailbox.0.clone();
+            let webview = builder.webview_conn.0.clone();
+            let (control, _control_rx) = super::ControlPlaneTx::new(false);
+            let mut previewer = builder.build(control, Arc::new(TestEditor)).await;
+            let (streams_tx, streams_rx) = mpsc::unbounded_channel();
+            previewer.start_data_plane(streams_rx, |socket| socket);
+            let (incoming_tx, incoming) = futures::channel::mpsc::unbounded();
+            let (outgoing, mut messages) = mpsc::unbounded_channel();
+            let failures = Arc::new(AtomicUsize::new(0));
+            streams_tx
+                .send(futures::future::ready(Ok(FailingSocket {
+                    socket: TestSocket {
+                        incoming,
+                        outgoing: Some(outgoing),
+                    },
+                    sent: 0,
+                    fail_after,
+                    failures: failures.clone(),
+                })))
+                .unwrap();
+            assert!(demand_event(&mut demand_rx).await);
+            if fail_after == 3 {
+                for _ in 0..3 {
+                    tokio::time::timeout(std::time::Duration::from_secs(2), messages.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
+                match trigger {
+                    "compile" => watcher.status(super::CompileStatus::Compiling),
+                    "ping" => incoming_tx
+                        .unbounded_send(Ok(WsMessage::Ping(vec![].into())))
+                        .unwrap(),
+                    "highlight" => incoming_tx
+                        .unbounded_send(Ok(WsMessage::Text("src-highlight {}".into())))
+                        .unwrap(),
+                    "viewport" => {
+                        webview
+                            .send(
+                                super::actor::webview::WebviewActorRequest::ViewportPosition(
+                                    super::DocumentPosition {
+                                        page_no: 1,
+                                        x: 0.,
+                                        y: 0.,
+                                    },
+                                ),
+                            )
+                            .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            assert!(!demand_event(&mut demand_rx).await);
+            renderer_count(&renderer, 0).await;
+            assert_eq!(failures.load(Ordering::SeqCst), 1, "{trigger}");
+            previewer.stop().await;
+            previewer.join().await;
+        }
     }
 
     #[tokio::test]
