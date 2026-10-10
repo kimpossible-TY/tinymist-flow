@@ -12,17 +12,22 @@ use crate::actor::render::RenderActor;
 
 const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_PAGES: usize = 50_000;
+const SCHEMA_VERSION: u32 = 2;
 pub(crate) type ChangePosition = (usize, f64, f64);
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Variant {
     page_hashes: Vec<u64>,
+    source_fingerprint: Option<String>,
     position: Option<ChangePosition>,
 }
 
 impl Variant {
     fn valid(&self) -> bool {
         self.page_hashes.len() <= MAX_PAGES
+            && self.source_fingerprint.as_ref().is_none_or(|fingerprint| {
+                fingerprint.len() == 32 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
             && self.position.is_none_or(|(page, x, y)| {
                 page > 0
                     && page <= self.page_hashes.len()
@@ -76,7 +81,7 @@ impl ChangeTracker {
         })();
         let record = match loaded {
             Ok(record)
-                if record.schema_version == 1
+                if record.schema_version == SCHEMA_VERSION
                     && record.project == project
                     && record.variants.len() <= 3
                     && record.variants.iter().all(|(key, value)| {
@@ -86,7 +91,7 @@ impl ChangeTracker {
                 record
             }
             Ok(_) => Record {
-                schema_version: 1,
+                schema_version: SCHEMA_VERSION,
                 project,
                 variants: BTreeMap::new(),
             },
@@ -95,7 +100,7 @@ impl ChangeTracker {
                     log::warn!("Ignoring invalid preview change record: {error}");
                 }
                 Record {
-                    schema_version: 1,
+                    schema_version: SCHEMA_VERSION,
                     project,
                     variants: BTreeMap::new(),
                 }
@@ -125,19 +130,39 @@ impl ChangeTracker {
         if hashes.len() > MAX_PAGES {
             return;
         }
+        let source_fingerprint = view.preview_source_fingerprint();
         let mut record = self.store.record.lock();
         let old = record.variants.get(&self.variant);
-        if old.is_some_and(|old| old.page_hashes == hashes) {
+        if old.is_some_and(|old| {
+            old.page_hashes == hashes && old.source_fingerprint == source_fingerprint
+        }) {
             return;
         }
-        let changed = old
-            .map(|old| RenderActor::changed_pages(&old.page_hashes, &hashes))
-            .unwrap_or_default();
-        let position = resolve_change(view, previous, &changed);
+        let position = old.and_then(|old| {
+            let same_inputs = old
+                .source_fingerprint
+                .as_ref()
+                .zip(source_fingerprint.as_ref())
+                .is_some_and(|(old, new)| old == new);
+            if old.page_hashes == hashes || same_inputs {
+                // A comment can change source inputs without changing pixels;
+                // a renderer update can change page hashes without any edit.
+                // Rebase either baseline without replacing its saved location.
+                old.position.filter(|(page, _, _)| *page <= hashes.len())
+            } else if previous.is_some() {
+                let changed = RenderActor::changed_pages(&old.page_hashes, &hashes);
+                resolve_change(view, previous, &changed)
+            } else {
+                // On startup, changed output cannot identify the user's edit.
+                // In particular, the first changed page may just be an outline.
+                None
+            }
+        });
         record.variants.insert(
             self.variant.clone(),
             Variant {
                 page_hashes: hashes,
+                source_fingerprint,
                 position,
             },
         );
@@ -161,17 +186,23 @@ pub(crate) fn resolve_change(
     previous: Option<&Arc<dyn CompileView>>,
     changed: &[usize],
 ) -> Option<ChangePosition> {
+    let previous = previous?;
+    if view
+        .preview_source_fingerprint()
+        .zip(previous.preview_source_fingerprint())
+        .is_some_and(|(current, previous)| current == previous)
+    {
+        return None;
+    }
     let first = *changed.first()?;
-    if let Some(previous) = previous {
-        for position in view.changed_document_positions(previous.as_ref()) {
-            let page = position.page.get();
-            if changed.contains(&page) {
-                return Some((
-                    page,
-                    position.point.x.to_pt().max(0.0),
-                    position.point.y.to_pt().max(0.0),
-                ));
-            }
+    for position in view.changed_document_positions(previous.as_ref()) {
+        let page = position.page.get();
+        if changed.contains(&page) {
+            return Some((
+                page,
+                position.point.x.to_pt().max(0.0),
+                position.point.y.to_pt().max(0.0),
+            ));
         }
     }
     log::debug!(
@@ -223,6 +254,7 @@ mod tests {
 
     struct View {
         document: TypstDocument,
+        source_fingerprint: Option<String>,
     }
     impl CompileView for View {
         fn as_any(&self) -> &dyn std::any::Any {
@@ -239,6 +271,9 @@ mod tests {
         }
         fn is_by_entry_update(&self) -> bool {
             false
+        }
+        fn preview_source_fingerprint(&self) -> Option<String> {
+            self.source_fingerprint.clone()
         }
         fn changed_document_positions(&self, _: &dyn CompileView) -> Vec<PagedPosition> {
             vec![PagedPosition {
@@ -257,6 +292,9 @@ mod tests {
         ))
     }
     fn document(text: &str) -> Arc<dyn CompileView> {
+        document_with_inputs(text, text)
+    }
+    fn document_with_inputs(text: &str, inputs: &str) -> Arc<dyn CompileView> {
         let mut result = None;
         tinymist_tests::run_with_sources(text, |verse, _| {
             let doc = typst::compile::<TypstPagedDocument>(&verse.snapshot())
@@ -264,12 +302,20 @@ mod tests {
                 .unwrap();
             result = Some(Arc::new(View {
                 document: TypstDocument::Paged(Arc::new(doc)),
+                source_fingerprint: Some(format!("{:032x}", tinymist_std::hash::hash128(&inputs))),
             }) as Arc<dyn CompileView>);
         });
         result.unwrap()
     }
     fn hashes(view: &Arc<dyn CompileView>) -> Vec<u64> {
         RenderActor::page_hashes(&view.doc().unwrap()).unwrap()
+    }
+
+    fn without_fingerprint(view: &Arc<dyn CompileView>) -> Arc<dyn CompileView> {
+        Arc::new(View {
+            document: view.doc().unwrap(),
+            source_fingerprint: None,
+        })
     }
 
     #[test]
@@ -300,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn restart_with_changed_output_replaces_stale_coordinates() {
+    fn restart_with_changed_source_does_not_guess_the_first_changed_page() {
         let path = path();
         let tracker = ChangeTracker::new(path.clone(), "project".into(), "default").unwrap();
         let before = document("First\n#pagebreak()\nBefore");
@@ -309,7 +355,114 @@ mod tests {
         tracker.observe(&after, Some(&before));
         let restarted = ChangeTracker::new(path.clone(), "project".into(), "default").unwrap();
         restarted.observe(&before, None);
-        assert_eq!(restarted.position(&hashes(&before)), Some((2, 0.0, 0.0)));
+        assert_eq!(restarted.position(&hashes(&before)), None);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unchanged_inputs_rebase_render_changes_without_replacing_the_last_edit() {
+        let path = path();
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        let before = document("First\n#pagebreak()\nBefore");
+        let edited = document("First\n#pagebreak()\nAfter");
+        let rerendered = document_with_inputs(
+            "First\n#pagebreak()\nRenderer changed appearance",
+            "First\n#pagebreak()\nAfter",
+        );
+        tracker.observe(&before, None);
+        tracker.observe(&edited, Some(&before));
+        assert_eq!(resolve_change(&rerendered, Some(&edited), &[2]), None);
+        tracker.observe(&rerendered, Some(&edited));
+        assert_eq!(
+            tracker.position(&hashes(&rerendered)),
+            Some((2, 12.0, 34.0))
+        );
+
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        restarted.observe(&edited, None);
+        assert_eq!(restarted.position(&hashes(&edited)), Some((2, 12.0, 34.0)));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn nonvisual_source_edits_refresh_the_restart_baseline_and_keep_the_last_edit() {
+        let path = path();
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        let before = document("First\n#pagebreak()\nBefore");
+        let edited = document("First\n#pagebreak()\nAfter");
+        let commented = document("// comment\nFirst\n#pagebreak()\nAfter");
+        assert_eq!(hashes(&edited), hashes(&commented));
+        tracker.observe(&before, None);
+        tracker.observe(&edited, Some(&before));
+        tracker.observe(&commented, Some(&edited));
+        assert_eq!(tracker.position(&hashes(&commented)), Some((2, 12.0, 34.0)));
+        let rerendered = document_with_inputs(
+            "First\n#pagebreak()\nNew renderer appearance",
+            "// comment\nFirst\n#pagebreak()\nAfter",
+        );
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        restarted.observe(&rerendered, None);
+        assert_eq!(
+            restarted.position(&hashes(&rerendered)),
+            Some((2, 12.0, 34.0))
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_restart_fallback_records_establish_a_fresh_baseline() {
+        let path = path();
+        let view = document("First\n#pagebreak()\nBody");
+        let record = serde_json::json!({
+            "schema_version": 1,
+            "project": "project",
+            "variants": {
+                "light": { "page_hashes": hashes(&view), "position": [2, 0.0, 0.0] },
+            },
+        });
+        std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        tracker.observe(&view, None);
+        assert_eq!(tracker.position(&hashes(&view)), None);
+        let record: Record = serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+        assert_eq!(record.schema_version, SCHEMA_VERSION);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn missing_fingerprints_never_make_changed_restart_output_look_like_an_edit() {
+        let path = path();
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "default").unwrap();
+        let before = without_fingerprint(&document("First\n#pagebreak()\nBefore"));
+        let after = without_fingerprint(&document("First\n#pagebreak()\nAfter"));
+        tracker.observe(&before, None);
+        tracker.observe(&after, Some(&before));
+        assert_eq!(tracker.position(&hashes(&after)), Some((2, 12.0, 34.0)));
+
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "default").unwrap();
+        restarted.observe(&after, None);
+        assert_eq!(restarted.position(&hashes(&after)), Some((2, 12.0, 34.0)));
+        restarted.observe(&before, None);
+        assert_eq!(restarted.position(&hashes(&before)), None);
+        restarted.observe(&before, None);
+        assert_eq!(restarted.position(&hashes(&before)), None);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn unchanged_inputs_do_not_preserve_a_location_beyond_the_new_page_count() {
+        let path = path();
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        let before = document("First\n#pagebreak()\nBefore");
+        let after = document("First\n#pagebreak()\nAfter");
+        tracker.observe(&before, None);
+        tracker.observe(&after, Some(&before));
+        let rerendered = document_with_inputs("First", "First\n#pagebreak()\nAfter");
+        tracker.observe(&rerendered, Some(&after));
+        assert_eq!(tracker.position(&hashes(&rerendered)), None);
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        restarted.observe(&rerendered, None);
+        assert_eq!(restarted.position(&hashes(&rerendered)), None);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -340,8 +493,9 @@ mod tests {
         let view = document("First");
         for contents in [
             "bad json",
-            r#"{"schema_version":1,"project":"other","variants":{}}"#,
-            r#"{"schema_version":1,"project":"project","variants":{"light":{"page_hashes":[0],"position":[999,0,0]}}}"#,
+            r#"{"schema_version":2,"project":"other","variants":{}}"#,
+            r#"{"schema_version":2,"project":"project","variants":{"light":{"page_hashes":[0],"source_fingerprint":null,"position":[999,0,0]}}}"#,
+            r#"{"schema_version":2,"project":"project","variants":{"light":{"page_hashes":[0],"source_fingerprint":"invalid","position":null}}}"#,
         ] {
             std::fs::write(&path, contents).unwrap();
             let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();

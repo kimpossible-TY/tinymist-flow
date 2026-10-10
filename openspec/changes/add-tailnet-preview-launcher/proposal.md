@@ -44,6 +44,8 @@ Preserve native touch text selection and copy menus. Restrict custom document dr
 
 Persist the most recent visual edit per project and document variant on the server, including edits made without connected viewers. New and refreshed viewers resume there after rendering. Keep explicit assistant selections separate and preserve reading state during palette changes and transport reconnections in an already rendered viewer.
 
+Distinguish observed edits from the first compilation after startup. Persist stable dependency fingerprints so unchanged source retains its last edit across renderer changes. When stopped-service edits or legacy history cannot identify an actual edited location, establish a fresh baseline instead of restoring the first changed page, which may be an outline on page 2.
+
 ## Edge-to-edge mobile viewport
 
 Remove the browser's landscape safe-area gutters from the document surface, retain safe positioning of controls/feedback, and follow dynamic viewport height and settled scrollport dimensions without resetting zoom or reading position. Implement this as an external engine update in an isolated engine worktree; do not reintroduce engine sources into the Flow-only main checkout.

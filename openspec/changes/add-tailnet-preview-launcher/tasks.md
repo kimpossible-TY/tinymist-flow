@@ -146,3 +146,14 @@ Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser
 - [ ] 19.4 Build from a clean fix commit, package and install with recovery, preserve profile running state, and verify installed document delivery and reconnect behavior.
 
 2026-10-08 reconnect verification: the page-2 replay regressions failed before the fix and pass afterward. All 43 frontend and 26 DOM tests, both TypeScript checks, preview build, scoped Prettier checks, guide PDF compilation, generated-doc consistency and strict OpenSpec validation passed. A disposable 20-page browser fixture used the installed compiler backend with the newly built frontend served through an ephemeral loopback proxy. Two actual WebSocket reconnections replayed `resume,2` while scrollTop 6906 and preview scale 1.5 were retained, including a recent gesture without a stale jump button. Subsequent live edits, deferred button navigation and reload restoration passed with no browser errors. Temporary services, browser and fixture files were cleaned up. The installed app and managed profiles were not changed; physical iPhone verification remains separate.
+
+## 20. Avoid inferred page-2 restoration on first entry
+
+- [x] 20.1 Reproduce first-entry restoration from startup fallback coordinates and distinguish it from an observed visual edit.
+- [x] 20.2 Persist stable dependency fingerprints, rebase unchanged-input output, and establish a fresh baseline for stopped-service edits and legacy inferred history; add regression coverage.
+- [ ] 20.3 Verify ordered live edits, refresh, reconnection, both themes, migration and stopped-service outlined-heading edits in an isolated preview; update guidance and validate scoped checks.
+- [ ] 20.4 Build and install a clean-commit signed app with recovery, preserving managed profile state, and verify actual first-entry document delivery.
+
+The reconnect prerequisite imports local commit `57cd14d05bef5b827b78ae3e04bd3777fa9c8569` as `c9940503`; its tasks are recorded in section 19 to retain the existing section 17 history.
+
+2026-10-10 first-entry evidence: installed 0.1.9 (engine `50abccc0`) sent `resume,2 0 0` in light and `resume,6 0 0` in dark for the 313-page PDE document. The referenced `3.5.typ TUI` task last changed `chapter 3/3.5.typ:380`, so these zero-coordinate startup fallbacks do not identify that edit. Three isolated restarts with unchanged PDE input were stable; no inherent process hash nondeterminism was established. The new browser migration regression fails against the installed engine because legacy history still supplies a resume hint.

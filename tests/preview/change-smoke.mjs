@@ -103,6 +103,13 @@ const record = async () => {
   }
 };
 const lastHint = (client, kind) => client.messages.filter((x) => x.type === kind).at(-1);
+const visualState = (variants) =>
+  Object.fromEntries(
+    Object.entries(variants).map(([theme, variant]) => [
+      theme,
+      { page_hashes: variant.page_hashes, position: variant.position },
+    ]),
+  );
 function assertResume(client, page = 120) {
   const resume = lastHint(client, "resume");
   assert.ok(resume, "new viewer must receive the saved edit");
@@ -146,7 +153,8 @@ try {
       "ordered edit delta",
     );
   }
-  const unchanged = JSON.stringify((await record()).variants);
+  const beforeComment = (await record()).variants;
+  const unchanged = JSON.stringify(visualState(beforeComment));
   const revision = light.messages
     .filter((x) => x.type === "focus-revision")
     .at(-1)
@@ -161,9 +169,14 @@ try {
     "comment compilation",
   );
   assert.equal(
-    JSON.stringify((await record()).variants),
+    JSON.stringify(visualState((await record()).variants)),
     unchanged,
     "nonvisual edits must retain the saved position",
+  );
+  assert.notEqual(
+    (await record()).variants.light.source_fingerprint,
+    beforeComment.light.source_fingerprint,
+    "a comment updates the source baseline even when the rendered output is unchanged",
   );
   const fullFrames = light.messages.filter((x) => x.type === "new").length;
   assertResume(await connect("light"));
@@ -216,17 +229,64 @@ try {
   );
   await stop();
   await start();
-  assertResume(await connect("light"));
+  assertResume(await connect("dark"));
+  assert.equal(
+    lastHint(await connect("light"), "resume"),
+    undefined,
+    "a variant with stale source inputs must establish a new baseline after restart",
+  );
   await stop();
   await writeFile(passage, "Edited while the service was stopped.\n");
   await start();
   const stale = await connect("light");
-  assertResume(stale);
   assert.equal(
-    lastHint(stale, "resume").payload.toString(),
-    "120 0 0",
-    "restart must replace stale coordinates",
+    lastHint(stale, "resume"),
+    undefined,
+    "restart with changed source must not guess an edit from the first changed page",
   );
+  assert.equal((await record()).variants.light.position, null);
+  await stop();
+  const legacy = await record();
+  await writeFile(
+    changeFile,
+    JSON.stringify({
+      schema_version: 1,
+      project: legacy.project,
+      variants: Object.fromEntries(
+        Object.entries(legacy.variants).map(([theme, variant]) => [
+          theme,
+          { page_hashes: variant.page_hashes, position: [2, 0, 0] },
+        ]),
+      ),
+    }),
+  );
+  await start();
+  const migratedLight = await connect("light");
+  const migratedDark = await connect("dark");
+  for (const client of [migratedLight, migratedDark]) {
+    assert.equal(
+      lastHint(client, "resume"),
+      undefined,
+      "legacy page hashes with a guessed page 2 must not restore an unverified edit",
+    );
+  }
+  await delay(500);
+  await assertBodyEdit(
+    [migratedLight, migratedDark],
+    "Live edit after legacy history migration.\n",
+    "legacy history migration retains live source mapping",
+  );
+  assertResume(await connect("light"));
+  assertResume(await connect("dark"));
+  await stop();
+  const upgraded = await record();
+  for (const variant of Object.values(upgraded.variants)) {
+    variant.page_hashes = variant.page_hashes.map(() => 0);
+  }
+  await writeFile(changeFile, JSON.stringify(upgraded));
+  await start();
+  assertResume(await connect("light"));
+  assertResume(await connect("dark"));
   await stop();
   const other = resolve(temp, "other.typ");
   await copyFile(input, other);
@@ -345,8 +405,39 @@ try {
     );
   }
   await stop();
+  // Put the outline on page 2 and its heading body on page 120. An edit made
+  // while stopped changes both, but neither occurrence is an observed edit.
+  const stoppedOutline = resolve(temp, "stopped-outline.typ");
+  await writeFile(
+    stoppedOutline,
+    outlinedSource
+      .replace("#outline(title: none)", "[Cover page.]\n#pagebreak()\n#outline(title: none)")
+      .replace("range(2, 131)", "range(3, 131)"),
+  );
+  await writeFile(passage, "= Original stopped heading\n");
+  await start(stoppedOutline);
+  const stoppedLight = await connect("light");
+  const stoppedDark = await connect("dark");
+  await delay(500);
+  await assertBodyEdit(
+    [stoppedLight, stoppedDark],
+    "= Last observed heading edit\n",
+    "observed heading before restart",
+  );
+  await stop();
+  await writeFile(passage, "= Unobserved stopped heading edit\n");
+  await start(stoppedOutline);
+  for (const theme of ["light", "dark"]) {
+    assert.equal(
+      lastHint(await connect(theme), "resume"),
+      undefined,
+      "a stopped heading edit must not guess the outline on page 2",
+    );
+    assert.equal((await record()).variants[theme].position, null);
+  }
+  await stop();
   console.log(
-    "PASS: initial baseline, ordered live edits in both themes, refresh/new viewer, disconnected edits, restart, stale output, project isolation, new includes, outlined/repeated headings, paragraph/math/figure edits, and authored internal links",
+    "PASS: initial baseline, ordered live edits in both themes, refresh/new viewer, disconnected edits, unchanged restart, stale-input baseline, legacy history migration, project isolation, new includes, outlined/repeated headings, paragraph/math/figure edits, authored internal links, and stopped outline edits without guessed navigation",
   );
   if (keep) {
     await writeFile(passage, "= Original distant heading\n");

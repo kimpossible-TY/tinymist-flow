@@ -959,6 +959,14 @@ pub trait CompileView: Send + Sync {
         None
     }
 
+    /// Stable 128-bit hexadecimal fingerprint of this snapshot's source inputs.
+    ///
+    /// Unlike rendered page hashes, this remains comparable across compiler
+    /// restarts and upgrades, so rendering changes alone do not imply an edit.
+    fn preview_source_fingerprint(&self) -> Option<String> {
+        None
+    }
+
     /// Apply a real source highlight to a verified literal preview text range.
     fn highlight_preview_selection(
         &self,

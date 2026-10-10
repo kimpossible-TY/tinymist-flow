@@ -514,7 +514,7 @@ mod tests {
     use crate::change::ChangeTracker;
     use tinymist_std::typst::TypstPagedDocument;
 
-    struct View(TypstDocument);
+    struct View(TypstDocument, String);
 
     impl CompileView for View {
         fn as_any(&self) -> &dyn std::any::Any {
@@ -536,6 +536,10 @@ mod tests {
         fn is_by_entry_update(&self) -> bool {
             false
         }
+
+        fn preview_source_fingerprint(&self) -> Option<String> {
+            Some(self.1.clone())
+        }
     }
 
     fn document(source: &str) -> Arc<dyn CompileView> {
@@ -543,7 +547,10 @@ mod tests {
             let document = typst::compile::<TypstPagedDocument>(&verse.snapshot())
                 .output
                 .unwrap();
-            Arc::new(View(TypstDocument::Paged(Arc::new(document)))) as Arc<dyn CompileView>
+            Arc::new(View(
+                TypstDocument::Paged(Arc::new(document)),
+                format!("{:032x}", tinymist_std::hash::hash128(&source)),
+            )) as Arc<dyn CompileView>
         })
     }
 
@@ -602,6 +609,45 @@ mod tests {
             .unwrap();
         assert!(frame.starts_with(protocol::NEW_PREFIX));
         assert!(frame.len() > protocol::NEW_PREFIX.len());
+        drop(signal);
+        task.await.unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_current_after_unobserved_source_changes_does_not_resume_at_page_two() {
+        let path = std::env::temp_dir().join(format!(
+            "tinymist-startup-current-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        let before = document("First\n#pagebreak()\nBefore");
+        let edited = document("First\n#pagebreak()\nAfter");
+        tracker.observe(&before, None);
+        tracker.observe(&edited, Some(&before));
+
+        let restarted =
+            Arc::new(ChangeTracker::new(path.clone(), "project".into(), "light").unwrap());
+        restarted.observe(&before, None);
+        let (signal, mailbox) = broadcast::channel(16);
+        let view = Arc::new(parking_lot::RwLock::new(Some(before)));
+        let (editor, _editor_rx) = mpsc::unbounded_channel();
+        let (svg, mut frames) = mpsc::unbounded_channel();
+        let (webview, _webview_rx) = broadcast::channel(16);
+        let actor = RenderActor::new(mailbox, view, editor, svg, webview, false, Some(restarted));
+        let task = tokio::spawn(actor.run());
+        signal.send(RenderActorRequest::RenderFullLatest).unwrap();
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(frame.starts_with(protocol::NEW_PREFIX));
+        assert!(frame.len() > protocol::NEW_PREFIX.len());
+        assert!(frames.try_recv().is_err());
         drop(signal);
         task.await.unwrap();
         std::fs::remove_file(path).unwrap();

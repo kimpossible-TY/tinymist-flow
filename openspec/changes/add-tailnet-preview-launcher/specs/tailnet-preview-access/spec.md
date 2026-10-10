@@ -134,8 +134,23 @@ Configured standalone paged preview SHALL persist the last visual edit per proje
 - **WHEN** the service restarts with unchanged paged output
 - **THEN** its last edited position remains available
 - **WHEN** output changed while the service was stopped
-- **THEN** it uses the first changed page rather than stale coordinates
+- **THEN** its first compilation establishes a fresh baseline without guessing an edit from the first changed page
 - **AND** invalid or different-project records do not cause navigation
+
+#### Scenario: A distant stopped-service edit changes the outline
+- **GIVEN** an edit to a distant heading also changes the outline on page 2 while the service is stopped
+- **WHEN** a viewer opens after the service starts
+- **THEN** the viewer does not restore page 2 as the last edited location
+- **AND** subsequent observed edits and refreshed viewers still use the mapped body location
+
+#### Scenario: Output changes without a source edit
+- **WHEN** dependency contents match the stored baseline but renderer output fingerprints differ
+- **THEN** a valid saved edit position is retained while output fingerprints are rebased
+- **AND** no live change navigation is emitted for unchanged dependency contents
+
+#### Scenario: Legacy startup guesses are not replayed
+- **WHEN** the saved record uses the older schema without dependency fingerprints
+- **THEN** the first compilation establishes a fresh baseline without replaying an inferred page-2 position
 
 #### Scenario: A new viewer does not move an existing reader
 - **WHEN** a new viewer requests its initial document

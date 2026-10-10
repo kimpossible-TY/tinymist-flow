@@ -117,6 +117,28 @@ impl tinymist_preview::CompileView for PreviewCompileView {
         ))
     }
 
+    fn preview_source_fingerprint(&self) -> Option<String> {
+        let world = self.art.world();
+        let mut inputs = Vec::new();
+        for id in self.art.depended_files().iter().copied() {
+            // Source reads use the compiled snapshot, including unsaved edits.
+            // Binary dependencies such as images contribute their bytes too.
+            let content = match world.source(id) {
+                Ok(source) => tinymist_std::hash::hash128(&source.text()),
+                Err(_) => tinymist_std::hash::hash128(&world.file(id).ok()?),
+            };
+            inputs.push((
+                id.package().map(ToString::to_string),
+                id.vpath().as_rooted_path().to_owned(),
+                content,
+            ));
+        }
+        // FileId intern numbers and dependency discovery order are process-local.
+        inputs.sort_unstable();
+        inputs.dedup();
+        Some(format!("{:032x}", tinymist_std::hash::hash128(&inputs)))
+    }
+
     fn highlight_preview_selection(
         &self,
         start: &reflexo::debug_loc::DocumentPosition,
