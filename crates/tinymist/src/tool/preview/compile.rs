@@ -15,7 +15,7 @@ use tinymist_query::{jump_from_click, jump_from_cursor};
 use typst::introspection::{MetadataElem, PagedPosition as Position, Tag};
 use typst::layout::{Abs, Frame, FrameItem, Point};
 use typst::model::{Destination, OutlineElem, OutlineEntry};
-use typst::syntax::{FileId, LinkedNode, Source, Span, SyntaxKind};
+use typst::syntax::{FileId, LinkedNode, Source, Span, SyntaxKind, VirtualRoot};
 use typst::World;
 use typst_shim::syntax::LinkedNodeExt;
 
@@ -128,8 +128,11 @@ impl tinymist_preview::CompileView for PreviewCompileView {
                 Err(_) => tinymist_std::hash::hash128(&world.file(id).ok()?),
             };
             inputs.push((
-                id.package().map(ToString::to_string),
-                id.vpath().as_rooted_path().to_owned(),
+                match id.root() {
+                    VirtualRoot::Project => None,
+                    VirtualRoot::Package(package) => Some(package.to_string()),
+                },
+                id.vpath().get_with_slash().to_owned(),
                 content,
             ));
         }

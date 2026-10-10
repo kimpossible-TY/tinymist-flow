@@ -149,6 +149,16 @@ const metrics = (page) =>
     };
   });
 async function assertBodyVisible(page, label) {
+  await until(async () => {
+    const result = await metrics(page);
+    return (
+      result.top > 1000 &&
+      result.bodyTop < result.height &&
+      result.bodyBottom > 0 &&
+      result.buttonHidden
+    );
+  }, label);
+  await settle(page);
   const result = await metrics(page);
   assert.ok(
     result.top > 1000 && result.bodyTop < result.height && result.bodyBottom > 0,
@@ -298,7 +308,10 @@ try {
     });
     await settle(page);
     const before = await metrics(page);
-    assert.ok(before.top > 1000, `Reader moved away from the edited body: ${JSON.stringify(before)}`);
+    assert.ok(
+      before.top > 1000,
+      `Reader moved away from the edited body: ${JSON.stringify(before)}`,
+    );
     assert.equal(before.scale, 1.25);
     await page.evaluate(() => document.getElementById("typst-container").typstWebsocket.close());
     await page.waitForFunction((count) => window.testSocketOpens > count, before.socketOpens);
