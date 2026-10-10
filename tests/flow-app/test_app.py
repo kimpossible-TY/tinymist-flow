@@ -182,10 +182,32 @@ class InstallRecovery(unittest.TestCase):
             for path, text in [(old, 'old'), (incoming, 'new')]:
                 package.executable(path).parent.mkdir(parents=True); package.executable(path).write_text(text)
             settings = root / 'data/profiles.json'; settings.parent.mkdir(); settings.write_text('preserved')
-            with patch.object(package, 'validate', return_value={}), patch.object(package, 'running', return_value=['test']), patch.object(package, 'run'), patch.object(package.subprocess, 'run'), patch.object(package, 'healthy', side_effect=RuntimeError('failed')):
+            with patch.object(package, 'validate', return_value={}), patch.object(package, 'running', return_value=['test']), patch.object(package, 'capture', return_value='{"running": false}'), patch.object(package, 'run'), patch.object(package.subprocess, 'run'), patch.object(package, 'healthy', side_effect=RuntimeError('failed')):
                 with self.assertRaises(RuntimeError): package.replace_app(incoming, old, root / 'data')
             self.assertEqual(package.executable(old).read_text(), 'old')
             self.assertEqual(settings.read_text(), 'preserved')
+    def test_update_waits_for_asynchronous_stop_before_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); old = root / 'Applications/tinymist-flow.app'; incoming = root / 'new/tinymist-flow.app'
+            for path, text in [(old, 'old'), (incoming, 'new')]:
+                package.executable(path).parent.mkdir(parents=True); package.executable(path).write_text(text)
+            states = iter([True, False])
+            def status(args):
+                self.assertEqual(package.executable(old).read_text(), 'old')
+                return json.dumps({'running': next(states)})
+            def control(args):
+                if args[-2] == 'start': self.assertEqual(package.executable(old).read_text(), 'new')
+            with patch.object(package, 'validate', return_value={}), patch.object(package, 'running', return_value=['test']), \
+                    patch.object(package, 'run', side_effect=control) as commands, patch.object(package, 'capture', side_effect=status) as checks, \
+                    patch.object(package.time, 'sleep'), patch.object(package, 'healthy'):
+                package.replace_app(incoming, old, root / 'data')
+            self.assertEqual(checks.call_count, 2)
+            self.assertEqual([call.args[0][-2] for call in commands.call_args_list], ['stop', 'start'])
+    def test_stop_timeout_is_reported(self):
+        with patch.object(package, 'capture', return_value='{"running": true}'), \
+                patch.object(package.time, 'monotonic', side_effect=[0, 0, 11]), patch.object(package.time, 'sleep'):
+            with self.assertRaisesRegex(RuntimeError, 'did not stop.*test'):
+                package.wait_stopped(Path('/fake/app'), ['test'])
     def test_successful_update_keeps_recovery_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); old = root / 'Applications/tinymist-flow.app'; incoming = root / 'new/tinymist-flow.app'

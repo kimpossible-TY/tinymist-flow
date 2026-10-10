@@ -21,6 +21,7 @@ Non-goals: replacing tinymist at runtime, a new editor, or an automatic public u
 - Store only the selected certificate's SHA-1 identifier in user Application Support via an explicit configure-signing command. Resolve build identity from --identity, FLOW_SIGN_IDENTITY, the saved configuration, then the existing ad-hoc default. A saved but unavailable certificate is an error. Keep private keys in the user's Keychain; configuration contains no private key or password.
 - Sign the app and engine with the same certificate, record its SHA-256 fingerprint in the release manifest, and verify both signatures against that fingerprint. Existing ad-hoc bundles remain verifiable. Use a local self-signed code-signing certificate for this personal Mac; do not introduce general certificate trust or change TCC databases.
 - Compare designated requirements across independently built bundles before installation. Initial migration from ad-hoc signing may require OS consent; report permission continuity as verified only after real document delivery survives another installed build.
+- After stopping profiles for installation or recovery, poll their status with a bounded deadline before moving the installed bundle. launchd bootout can return while the old PID remains visible; an immediate start can otherwise skip the new job because it still sees that PID.
 
 ## Risks / Trade-offs
 

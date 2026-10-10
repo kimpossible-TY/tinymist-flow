@@ -29,5 +29,6 @@
 - [x] 6.1 Add explicit signing configuration, automatic reuse, and missing-certificate rejection.
 - [x] 6.2 Record and validate the shared app/engine certificate fingerprint; test configuration and signer mismatch behavior.
 - [x] 6.3 Create and retain the user-approved local signing identity in Keychain, document setup, and verify different builds satisfy the same designated requirements.
-- [ ] 6.4 Build from a clean commit, install with recovery, and verify initial consent plus HTTPS document delivery.
-- [ ] 6.5 Verify document delivery after a subsequent installed build without renewed consent; record any remaining native approval limitation.
+- [x] 6.4 Build from a clean commit, install with recovery, and verify initial consent plus HTTPS document delivery.
+- [x] 6.5 Verify document delivery after a subsequent installed build without renewed consent; record any remaining native approval limitation.
+- [x] 6.6 Wait for asynchronous preview shutdown during update and recovery; verify the observed restart race.

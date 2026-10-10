@@ -91,6 +91,11 @@ Installation SHALL validate the incoming bundle and preserve the previous instal
 - **THEN** settings and project source files are preserved
 - **AND** the installed version and source revision can be inspected
 
+#### Scenario: Preview shutdown completes asynchronously
+- **WHEN** a stop command returns before the previous preview process disappears
+- **THEN** installation waits for its stopped status before replacing the bundle or restarting profiles
+- **AND** a bounded shutdown failure is reported instead of treating the new preview as started
+
 ### Requirement: Tail Hosting integration
 Migration SHALL import the configured project, keep its port and HTTPS URL, and leave ingress ownership with Tail Hosting. The adapter SHALL preserve a recoverable copy of the previous configuration.
 

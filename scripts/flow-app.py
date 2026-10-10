@@ -229,6 +229,17 @@ def running(app):
         if state['running'] and state.get('managedByApp', False): active.append(p['id'])
     return active
 
+def wait_stopped(app, ids, timeout=10):
+    """Wait for asynchronous launchd bootout before replacing or restarting an app."""
+    pending = set(ids)
+    deadline = time.monotonic() + timeout
+    while pending and time.monotonic() < deadline:
+        for pid in list(pending):
+            state = json.loads(capture([executable(app), '--status', pid]))
+            if not state['running']: pending.remove(pid)
+        if pending: time.sleep(.1)
+    if pending: raise RuntimeError('Preview did not stop before update: ' + ', '.join(sorted(pending)))
+
 def healthy(app, ids, timeout=30):
     if not ids: return
     by_id = {p['id']: p for p in profiles(app)}
@@ -267,6 +278,7 @@ def _replace_app(source, destination, data_dir, check_health):
     try:
         for pid in active:
             run([executable(destination), '--control', 'stop', pid]); stopped.append(pid)
+        wait_stopped(destination, stopped)
         if had_previous:
             backup.parent.mkdir(); os.replace(destination, backup)
         os.replace(stage, destination); swapped = True
@@ -275,6 +287,7 @@ def _replace_app(source, destination, data_dir, check_health):
     except Exception:
         for pid in stopped:
             if executable(destination).exists(): subprocess.run([str(executable(destination)), '--control', 'stop', pid], capture_output=True)
+        if executable(destination).exists(): wait_stopped(destination, stopped)
         if swapped and destination.exists():
             failed = releases / (stamp + '-failed'); failed.mkdir(); os.replace(destination, failed / destination.name)
         if backup.exists(): os.replace(backup, destination)

@@ -99,7 +99,7 @@ The initial switch from ad-hoc signing may require one new Documents approval. K
 
 = Update and recover
 
-Use a short feature branch, run the relevant tests, merge into `main`, and build from a clean commit. Install the new bundle with the same install command. The installer checks the bundle signature, engine hash and version before replacing anything, backs up the old app, restarts previously running profiles, and checks HTTP startup. If startup fails, it restores the old bundle. Verify document rendering after installation; HTTP alone does not establish document health.
+Use a short feature branch, run the relevant tests, merge into `main`, and build from a clean commit. Install the new bundle with the same install command. The installer checks the bundle signature, engine hash and version before replacing anything, waits for running profiles to stop, backs up the old app, restarts those profiles, and checks HTTP startup. If startup fails, it restores the old bundle. Verify document rendering after installation; HTTP alone does not establish document health.
 
 An ad-hoc update can wait for macOS Documents consent before opening its HTTP listener. To allow time for that prompt, defer live health verification during the single installation:
 
