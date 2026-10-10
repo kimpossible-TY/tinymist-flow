@@ -135,5 +135,5 @@ Native iPhone gesture checks in 10.6, 13.5 and 14.6 remain separate from browser
 ## 18. Disconnect recovery discovered during deployment
 
 - [x] 18.1 Stop connection initialization and the viewer actor at the first failed WebSocket send, releasing its renderers and viewer demand without polling the failed sink again.
-- [ ] 18.2 Validate startup and active-viewer send failures, real abrupt disconnects, reconnects and both-theme document delivery with a warning-free native engine.
+- [x] 18.2 Validate startup and active-viewer send failures, real abrupt disconnects, reconnects and both-theme document delivery with a warning-free native engine.
 - [ ] 18.3 Package the clean-commit engine, retain recovery and verify stable managed PDE delivery after installation and any renewed macOS consent.
