@@ -82,7 +82,20 @@ The app keeps the upstream engine protocol and VS Code configuration names. For 
 
 = Signing and macOS consent
 
-The app has a stable bundle ID: `io.github.kimpossible-ty.tinymist-flow`. Build with `FLOW_SIGN_IDENTITY` set to a valid code-signing identity when available. Without one the build is signed ad hoc. macOS can require Documents access again after an ad-hoc update. The app name and icon identify the request, but do not replace OS consent. Administrator authentication must be completed by the user when macOS requires it.
+The app has a stable bundle ID: `io.github.kimpossible-ty.tinymist-flow`. Configure a persistent code-signing identity or set `FLOW_SIGN_IDENTITY`. Without either, the build is signed ad hoc. macOS can require Documents access again after an ad-hoc update. The app name and icon identify the request, but do not replace OS consent. Administrator authentication must be completed by the user when macOS requires it.
+
+For repeated personal builds, create one code-signing certificate using Keychain Access's Certificate Assistant or use an existing Apple signing identity. Retain the certificate and its private key in Keychain, then save its identity once:
+
+```sh
+python3 scripts/flow-app.py configure-signing --identity "tinymist-flow Local Signing"
+python3 scripts/flow-app.py build --version 0.1.9
+```
+
+The first signing probe may ask for Keychain access. Complete authentication locally and select Always Allow for `/usr/bin/codesign` to reuse this key. Configuration is saved only after the probe succeeds; cancelling leaves the previous configuration intact.
+
+The saved configuration is `~/Library/Application Support/tinymist-flow/signing.json`; it contains the public certificate identifier, not a private key or password. Builds choose `--identity`, then `FLOW_SIGN_IDENTITY`, then the saved identity. A missing configured identity stops the build instead of falling back to ad-hoc signing. Both the app and bundled engine use the same certificate; the release manifest records its SHA-256 fingerprint, which bundle verification checks for both signatures. A personal self-signed certificate establishes a local identity; it does not provide Apple notarization or public distribution approval.
+
+The initial switch from ad-hoc signing may require one new Documents approval. Keep the same certificate for later builds. Verify document delivery after a subsequent installed build before treating permission continuity as confirmed. Certificate replacement or loss may require consent again.
 
 = Update and recover
 

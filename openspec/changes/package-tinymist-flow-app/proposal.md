@@ -13,6 +13,7 @@ Flow needs a stable branded macOS installation, project settings, visible previe
 - Align the development repository name and documentation with tinymist-flow, retaining the earlier independent repository as tinymist-flow-archive.
 - Maintain the app, engine, preview frontend and supporting workspace sources together; accept an external engine or build a native engine with recorded ThinLTO settings.
 - Preserve staged packaging, external engine provenance, freshly compiled app tests, and the repository naming changes when integrating preview work.
+- Persist a user-selected signing certificate for app and engine builds, reject missing configured identities instead of falling back to ad-hoc signing, and verify certificate provenance.
 
 ## Capabilities
 

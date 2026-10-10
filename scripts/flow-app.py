@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import plistlib
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -44,12 +45,67 @@ def write_json(path, value):
 def executable(app):
     return app / 'Contents/MacOS/tinymist-flow'
 
+def signing_identities():
+    output = capture(['/usr/bin/security', 'find-identity', '-p', 'codesigning'])
+    return dict(re.findall(r'\)\s+([0-9A-F]{40})\s+"([^"]+)"', output))
+
+def resolve_signing_identity(requested=None):
+    override = requested or os.environ.get('FLOW_SIGN_IDENTITY')
+    if override: return override
+    path = DATA / 'signing.json'
+    if not path.exists(): return '-'
+    config = json.loads(path.read_text())
+    if not isinstance(config, dict):
+        raise ValueError('Invalid signing configuration: ' + str(path))
+    identity = config.get('identity', '')
+    if config.get('schemaVersion') != 1 or not isinstance(identity, str) or not re.fullmatch('[0-9A-F]{40}', identity):
+        raise ValueError('Invalid signing configuration: ' + str(path))
+    if identity not in signing_identities():
+        raise ValueError('Configured signing certificate is unavailable. Restore its Keychain identity '
+                         'or explicitly run configure-signing; refusing ad-hoc fallback.')
+    return identity
+
+def signing_certificate(path):
+    """Return public certificate fingerprints without exporting its private key."""
+    with tempfile.TemporaryDirectory(prefix='flow-cert-') as tmp:
+        prefix = Path(tmp) / 'certificate'
+        run(['/usr/bin/codesign', '--display', '--extract-certificates', prefix, path], capture_output=True)
+        leaf = Path(str(prefix) + '0')
+        if not leaf.exists(): return None
+        data = leaf.read_bytes()
+        return {'sha1': hashlib.sha1(data).hexdigest().upper(), 'sha256': hashlib.sha256(data).hexdigest()}
+
+def configure_signing(args):
+    """Save a verified existing Keychain identity for subsequent local builds."""
+    identities = signing_identities()
+    matches = [sha for sha, name in identities.items() if args.identity.upper() == sha or args.identity == name]
+    if len(matches) != 1:
+        raise ValueError('Select exactly one available Keychain code-signing identity by name or SHA-1.')
+    identity = matches[0]
+    with tempfile.TemporaryDirectory(prefix='flow-signing-check-') as tmp:
+        probe = Path(tmp) / 'probe'; shutil.copyfile('/usr/bin/true', probe); probe.chmod(0o755)
+        run(['/usr/bin/codesign', '--force', '--sign', identity, '--identifier', APP_ID, probe], capture_output=True)
+        run(['/usr/bin/codesign', '--verify', '--strict', probe], capture_output=True)
+        certificate = signing_certificate(probe)
+        if not certificate or certificate['sha1'] != identity:
+            raise ValueError('Signing probe did not use the selected certificate')
+    path = DATA / 'signing.json'
+    write_json(path, {'schemaVersion': 1, 'identity': identity, 'name': identities[identity]})
+    path.chmod(0o600)
+    print('Signing identity saved: ' + identities[identity] + ' (' + identity + ')')
+
 def validate(app):
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     if info.get('CFBundleIdentifier') != APP_ID or info.get('CFBundleExecutable') != 'tinymist-flow':
         raise ValueError('Not a tinymist-flow app bundle')
     run(['/usr/bin/codesign', '--verify', '--deep', '--strict', app], capture_output=True)
     manifest = json.loads((app / 'Contents/Resources/release.json').read_text())
+    certificate_hash = manifest.get('signingCertificateSHA256')
+    if certificate_hash:
+        for path in (app, app / 'Contents/MacOS/flow-engine'):
+            certificate = signing_certificate(path)
+            if not certificate or certificate['sha256'] != certificate_hash:
+                raise ValueError('Signing certificate mismatch: ' + str(path))
     if digest(app / 'Contents/MacOS/flow-engine') != manifest['engineSHA256']:
         raise ValueError('Bundled engine hash mismatch')
     if capture([executable(app), '--version']) != 'tinymist-flow ' + manifest['version']:
@@ -86,6 +142,7 @@ def build(args):
     print(app)
 
 def build_bundle(args, app, engine, engine_version, engine_build=None):
+    identity = resolve_signing_identity(getattr(args, 'identity', None))
     mac = app / 'Contents/MacOS'; resources = app / 'Contents/Resources'
     mac.mkdir(parents=True); resources.mkdir()
     engine_input_hash = digest(engine)
@@ -116,7 +173,6 @@ def build_bundle(args, app, engine, engine_version, engine_build=None):
     guide = ROOT / 'docs/tinymist/flow-app.typ'
     if guide.exists():
         run([engine, 'compile', guide, resources / 'UserGuide.pdf', '--root', ROOT])
-    identity = args.identity
     run(['/usr/bin/codesign', '--force', '--sign', identity, '--identifier', APP_ID + '.engine', mac / 'flow-engine'])
     manifest = {'version': version, 'sourceRevision': capture(['git', '-C', ROOT, 'rev-parse', 'HEAD']),
                 'sourceDirty': bool(capture(['git', '-C', ROOT, 'status', '--porcelain'])),
@@ -124,6 +180,10 @@ def build_bundle(args, app, engine, engine_version, engine_build=None):
                 'engineInputSHA256': engine_input_hash,
                 'engineSHA256': digest(mac / 'flow-engine'), 'signing': 'ad-hoc' if identity == '-' else identity,
                 'builtAt': dt.datetime.now(dt.timezone.utc).isoformat()}
+    if identity != '-':
+        certificate = signing_certificate(mac / 'flow-engine')
+        if not certificate: raise ValueError('Certificate signing produced no certificate')
+        manifest['signingCertificateSHA256'] = certificate['sha256']
     if engine_build is not None:
         manifest['engineBuild'] = engine_build
     write_json(resources / 'release.json', manifest)
@@ -292,7 +352,8 @@ def restore_hosting(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__); sub = parser.add_subparsers(dest='command', required=True)
-    b = sub.add_parser('build'); b.add_argument('--engine', type=Path, help='External Flow-compatible engine (FLOW_ENGINE_PATH or installed app by default)'); b.add_argument('--output', type=Path, default=ROOT / 'dist/tinymist-flow.app'); b.add_argument('--version', default='0.1.0'); b.add_argument('--identity', default=os.environ.get('FLOW_SIGN_IDENTITY', '-')); b.add_argument('--build-engine', action='store_true', help='Build the native engine with ThinLTO before packaging'); b.add_argument('--jobs', type=int, default=2, help='Cargo workers when building the engine'); b.set_defaults(func=build)
+    b = sub.add_parser('build'); b.add_argument('--engine', type=Path, help='External Flow-compatible engine (FLOW_ENGINE_PATH or installed app by default)'); b.add_argument('--output', type=Path, default=ROOT / 'dist/tinymist-flow.app'); b.add_argument('--version', default='0.1.0'); b.add_argument('--identity', help='Signing identity (FLOW_SIGN_IDENTITY or saved configure-signing identity by default)'); b.add_argument('--build-engine', action='store_true', help='Build the native engine with ThinLTO before packaging'); b.add_argument('--jobs', type=int, default=2, help='Cargo workers when building the engine'); b.set_defaults(func=build)
+    s = sub.add_parser('configure-signing'); s.add_argument('--identity', required=True, help='Existing Keychain code-signing certificate name or SHA-1'); s.set_defaults(func=configure_signing)
     i = sub.add_parser('install'); i.add_argument('source', type=Path); i.add_argument('--app', type=Path, default=DEFAULT_APP); i.add_argument('--defer-health-check', action='store_true', help='Defer the live HTTP deadline while macOS consent is pending; keep bundle validation and backup'); i.set_defaults(func=install)
     r = sub.add_parser('rollback'); r.add_argument('--app', type=Path, default=DEFAULT_APP); r.set_defaults(func=rollback)
     m = sub.add_parser('migrate-tail-hosting'); m.add_argument('root', type=Path); m.add_argument('--app', type=Path, default=DEFAULT_APP); m.set_defaults(func=migrate)

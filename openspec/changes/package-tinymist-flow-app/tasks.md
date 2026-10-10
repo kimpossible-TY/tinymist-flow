@@ -24,3 +24,10 @@
 - [x] 5.2 Combine native engine builds with staged external engine packaging, provenance and deferred consent verification.
 - [x] 5.3 Align current source ownership, build documentation and behavior contracts with the restored workspace.
 - [x] 5.4 Validate the integrated tree and complete the merge into main.
+
+## 6. Persistent personal signing
+- [x] 6.1 Add explicit signing configuration, automatic reuse, and missing-certificate rejection.
+- [x] 6.2 Record and validate the shared app/engine certificate fingerprint; test configuration and signer mismatch behavior.
+- [ ] 6.3 Create and retain the user-approved local signing identity in Keychain, document setup, and verify different builds satisfy the same designated requirements.
+- [ ] 6.4 Build from a clean commit, install with recovery, and verify initial consent plus HTTPS document delivery.
+- [ ] 6.5 Verify document delivery after a subsequent installed build without renewed consent; record any remaining native approval limitation.

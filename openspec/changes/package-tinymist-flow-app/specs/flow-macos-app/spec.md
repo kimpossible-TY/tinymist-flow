@@ -60,6 +60,29 @@ The app SHALL let the user select or add projects, edit preview settings, open p
 - **WHEN** the user stops a project
 - **THEN** its job is disabled until explicitly started again
 
+### Requirement: Persistent signing identity
+Packaging SHALL support explicitly saving a user's signing certificate identifier and SHALL reuse it for app and engine builds unless --identity or FLOW_SIGN_IDENTITY overrides it. A configured but unavailable identity SHALL stop the build rather than silently selecting ad-hoc signing. Private keys SHALL remain outside source files and signing configuration.
+
+#### Scenario: Rebuild after configuring a certificate
+- **WHEN** a user builds without an explicit signing override after configuring a certificate
+- **THEN** the app and bundled engine use that same certificate
+- **AND** changed builds retain mutually compatible designated requirements
+
+#### Scenario: Configured certificate is unavailable
+- **WHEN** the configured signing certificate or its private key cannot be found
+- **THEN** the build reports the unavailable identity and preserves existing output
+- **AND** it does not silently sign ad hoc
+
+#### Scenario: Verify certificate provenance
+- **WHEN** a certificate-signed bundle is built or verified
+- **THEN** its manifest records the signing certificate SHA-256 fingerprint
+- **AND** verification rejects an app or engine signed by a different certificate
+
+#### Scenario: Migrate from ad-hoc signing
+- **WHEN** the installed app first changes to a persistent certificate
+- **THEN** normal macOS consent remains required where requested
+- **AND** update permission continuity is reported only after actual document delivery is verified across an installed update
+
 ### Requirement: Recoverable updates
 Installation SHALL validate the incoming bundle and preserve the previous installed version. A rollback command SHALL restore that bundle and restart previously running profiles. Failures SHALL be reported explicitly.
 

@@ -100,6 +100,76 @@ class EngineInput(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'build failed'): package.build(args)
         self.assertEqual(marker.read_text(), 'preserved')
 
+class Signing(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        data = patch.object(package, 'DATA', self.root); data.start(); self.addCleanup(data.stop)
+        env = patch.dict(os.environ, {}, clear=True); env.start(); self.addCleanup(env.stop)
+        self.identity = 'A' * 40
+
+    def save(self, **values):
+        (self.root / 'signing.json').write_text(json.dumps({'schemaVersion': 1, 'identity': self.identity, **values}))
+
+    def test_build_selection_preserves_explicit_and_environment_overrides(self):
+        self.assertEqual(package.resolve_signing_identity(), '-')
+        self.save()
+        with patch.object(package, 'signing_identities', return_value={self.identity: 'Local'}):
+            self.assertEqual(package.resolve_signing_identity(), self.identity)
+        with patch.dict(os.environ, FLOW_SIGN_IDENTITY='Environment'), patch.object(package, 'signing_identities') as identities:
+            self.assertEqual(package.resolve_signing_identity(), 'Environment')
+            self.assertEqual(package.resolve_signing_identity('Explicit'), 'Explicit')
+            self.assertEqual(package.resolve_signing_identity('-'), '-')
+            identities.assert_not_called()
+
+    def test_missing_identity_stops_build_without_replacing_output(self):
+        self.save()
+        output = self.root / 'tinymist-flow.app'; output.mkdir()
+        marker = output / 'previous'; marker.write_text('preserved')
+        args = argparse.Namespace(engine=self.root / 'engine', output=output, identity=None)
+        with patch.object(package, 'resolve_engine', return_value=(args.engine, 'fixture')), \
+                patch.object(package, 'signing_identities', return_value={}):
+            with self.assertRaisesRegex(ValueError, 'refusing ad-hoc fallback'): package.build(args)
+        self.assertEqual(marker.read_text(), 'preserved')
+
+    def test_invalid_config_is_not_treated_as_ad_hoc(self):
+        for values in ({'schemaVersion': 2}, {'identity': '-'}, {'identity': None}):
+            with self.subTest(values=values):
+                self.save(**values)
+                with self.assertRaisesRegex(ValueError, 'Invalid signing configuration'):
+                    package.resolve_signing_identity()
+        (self.root / 'signing.json').write_text('[]')
+        with self.assertRaisesRegex(ValueError, 'Invalid signing configuration'):
+            package.resolve_signing_identity()
+
+    def test_configure_pins_verified_certificate_and_no_secret(self):
+        with patch.object(package, 'signing_identities', return_value={self.identity: 'Local'}), \
+                patch.object(package, 'run'), \
+                patch.object(package, 'signing_certificate', return_value={'sha1': self.identity, 'sha256': 'B' * 64}):
+            package.configure_signing(argparse.Namespace(identity='Local'))
+        path = self.root / 'signing.json'
+        self.assertEqual(json.loads(path.read_text()), {'schemaVersion': 1, 'identity': self.identity, 'name': 'Local'})
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_ambiguous_name_or_failed_probe_keeps_config(self):
+        self.save(); original = (self.root / 'signing.json').read_bytes()
+        with patch.object(package, 'signing_identities', return_value={self.identity: 'Local', 'B' * 40: 'Local'}):
+            with self.assertRaisesRegex(ValueError, 'exactly one'): package.configure_signing(argparse.Namespace(identity='Local'))
+        with patch.object(package, 'signing_identities', return_value={self.identity: 'Local'}), \
+                patch.object(package, 'run'), patch.object(package, 'signing_certificate', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'probe'): package.configure_signing(argparse.Namespace(identity='Local'))
+        self.assertEqual((self.root / 'signing.json').read_bytes(), original)
+
+    def test_verification_rejects_other_signer_before_running_executable(self):
+        app = self.root / 'tinymist-flow.app'; resources = app / 'Contents/Resources'; resources.mkdir(parents=True)
+        (app / 'Contents/Info.plist').write_bytes(package.plistlib.dumps({'CFBundleIdentifier': package.APP_ID, 'CFBundleExecutable': 'tinymist-flow'}))
+        (resources / 'release.json').write_text(json.dumps({'signingCertificateSHA256': 'expected'}))
+        for certificates in ([{'sha256': 'other'}], [{'sha256': 'expected'}, None]):
+            with self.subTest(certificates=certificates), patch.object(package, 'run'), \
+                    patch.object(package, 'signing_certificate', side_effect=certificates), patch.object(package, 'capture') as execute:
+                with self.assertRaisesRegex(ValueError, 'Signing certificate mismatch'): package.validate(app)
+                execute.assert_not_called()
+
 class InstallRecovery(unittest.TestCase):
     def test_update_does_not_take_over_legacy_service(self):
         with patch.object(package, 'profiles', return_value=[{'id': 'test'}]), patch.object(package, 'capture', return_value=json.dumps({'running': True, 'managedByApp': False})):

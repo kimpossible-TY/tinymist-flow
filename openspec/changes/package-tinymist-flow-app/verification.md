@@ -58,3 +58,14 @@ The preview activity status branch is integrated with the engine, preview fronte
 - Restored engine, vendor, frontend and preview/performance fixtures match the incoming branch exactly; the merge resolution diff against the incoming branch passed git diff --check. The complete staged restoration retains pre-existing whitespace findings in upstream files and fixtures; those sources were kept unchanged.
 
 No live app installation, service migration or release tag was performed during integration.
+
+## Persistent personal signing — 2026-10-10
+
+Packaging can save an existing Keychain identity with `configure-signing --identity`, then reuse its certificate fingerprint for both app and engine builds. Explicit CLI and environment overrides retain precedence. Missing or malformed saved identities fail without replacing the previous output; configuration is saved only after a signing probe succeeds. Bundle validation checks the recorded public certificate SHA-256 against both signatures before executing either binary.
+
+- Twenty app/configuration/recovery tests passed, including fresh Swift compilation with warnings treated as errors.
+- Both external-engine integration tests passed: bundle provenance/signature and isolated installation, plus distinct light/dark document delivery through the configured WebSocket origin. The optional persistent-certificate integration test remains pending initial Keychain approval.
+- The user guide compiled successfully, OpenSpec strict validation passed, and the patch passed whitespace checks.
+- A personal code-signing identity named `tinymist-flow Local Signing` was created in the user's login Keychain. Its public certificate SHA-1 is `48CCFB52FB49CBE01B5FF5A0FD5859AFA8ADDBF1`. The private key remains in Keychain; temporary key/PKCS#12 files were removed. No general certificate trust or TCC database changes were applied.
+
+The first signing probe opened native Keychain authorization. Computer Use refused access to `com.apple.SecurityAgent` for safety reasons; the user reported being unable to access the Mac. The pending probe was cancelled, and `signing.json` was not written. The installed app was not replaced during this signing work. Registration, certificate-signed build checks, initial Documents consent, live HTTPS delivery, and permission continuity after a subsequent installed build remain unverified. Resume by rerunning `python3 scripts/flow-app.py configure-signing --identity "tinymist-flow Local Signing"` and completing the native key-use authorization locally.

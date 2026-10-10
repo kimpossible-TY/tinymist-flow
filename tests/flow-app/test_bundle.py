@@ -68,7 +68,7 @@ class ExternalEngineBundle(unittest.TestCase):
         cls.input_hash = package.digest(cls.engine)
         cls.env = {'FLOW_DATA_DIR': str(cls.root / 'data'), 'FLOW_LOG_DIR': str(cls.root / 'logs')}
         with patch.dict(os.environ, cls.env):
-            package.build(argparse.Namespace(engine=cls.engine, output=cls.app, version='0.1.0', identity='-'))
+            package.build(argparse.Namespace(engine=cls.engine, output=cls.app, version='0.1.0', identity=os.environ.get('FLOW_TEST_SIGN_IDENTITY', '-')))
 
     def test_provenance_signature_and_isolated_install(self):
         with patch.dict(os.environ, self.env):
@@ -116,6 +116,26 @@ class ExternalEngineBundle(unittest.TestCase):
                 try: child.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     os.killpg(child.pid, signal.SIGKILL); child.wait()
+
+    @unittest.skipUnless(os.environ.get('FLOW_TEST_SIGN_IDENTITY'), 'Set FLOW_TEST_SIGN_IDENTITY for persistent-certificate checks')
+    def test_changed_bundle_reuses_saved_identity_and_designated_requirements(self):
+        identity = os.environ['FLOW_TEST_SIGN_IDENTITY']
+        changed = self.root / 'updated/tinymist-flow.app'
+        with patch.object(package, 'DATA', self.root / 'signing-data'), patch.dict(os.environ, FLOW_SIGN_IDENTITY=''):
+            package.configure_signing(argparse.Namespace(identity=identity))
+            configured_identity = package.resolve_signing_identity()
+            package.build(argparse.Namespace(engine=self.engine, output=changed, version='0.1.1', identity=None))
+        manifest = package.validate(changed)
+        self.assertEqual(manifest['signing'], configured_identity)
+        self.assertEqual(manifest['signingCertificateSHA256'], package.validate(self.app)['signingCertificateSHA256'])
+        self.assertNotEqual(package.digest(package.executable(self.app)), package.digest(package.executable(changed)))
+        for old, new in ((self.app, changed), (self.app / 'Contents/MacOS/flow-engine', changed / 'Contents/MacOS/flow-engine')):
+            output = subprocess.check_output(['/usr/bin/codesign', '-d', '-r-', old], stderr=subprocess.STDOUT, text=True)
+            requirement = output.split('designated => ', 1)[1].strip()
+            self.assertNotIn('cdhash', requirement)
+            subprocess.run(['/usr/bin/codesign', '--verify', '--strict', '-R', '=' + requirement, new], check=True, capture_output=True)
+            output = subprocess.check_output(['/usr/bin/codesign', '-d', '-r-', new], stderr=subprocess.STDOUT, text=True)
+            self.assertEqual(output.split('designated => ', 1)[1].strip(), requirement)
 
 
 if __name__ == '__main__': unittest.main()
