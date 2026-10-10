@@ -134,11 +134,13 @@ impl ChangeTracker {
         let mut record = self.store.record.lock();
         let old = record.variants.get(&self.variant);
         if old.is_some_and(|old| {
-            old.page_hashes == hashes && old.source_fingerprint == source_fingerprint
+            old.page_hashes == hashes
+                && old.source_fingerprint == source_fingerprint
+                && (previous.is_some() || old.position.is_some())
         }) {
             return;
         }
-        let position = old.and_then(|old| {
+        let mut position = old.and_then(|old| {
             let same_inputs = old
                 .source_fingerprint
                 .as_ref()
@@ -158,6 +160,24 @@ impl ChangeTracker {
                 None
             }
         });
+        if previous.is_none() && position.is_none() {
+            position = view
+                .git_changed_document_positions()
+                .into_iter()
+                .map(|pos| (pos.page.get(), pos.point.x.to_pt(), pos.point.y.to_pt()))
+                .filter(|(page, x, y)| {
+                    *page <= hashes.len()
+                        && x.is_finite()
+                        && y.is_finite()
+                        && *x >= 0.0
+                        && *y >= 0.0
+                })
+                .min_by(|a, b| {
+                    a.0.cmp(&b.0)
+                        .then(a.2.total_cmp(&b.2))
+                        .then(a.1.total_cmp(&b.1))
+                });
+        }
         record.variants.insert(
             self.variant.clone(),
             Variant {
@@ -255,6 +275,7 @@ mod tests {
     struct View {
         document: TypstDocument,
         source_fingerprint: Option<String>,
+        git_positions: Vec<PagedPosition>,
     }
     impl CompileView for View {
         fn as_any(&self) -> &dyn std::any::Any {
@@ -274,6 +295,9 @@ mod tests {
         }
         fn preview_source_fingerprint(&self) -> Option<String> {
             self.source_fingerprint.clone()
+        }
+        fn git_changed_document_positions(&self) -> Vec<PagedPosition> {
+            self.git_positions.clone()
         }
         fn changed_document_positions(&self, _: &dyn CompileView) -> Vec<PagedPosition> {
             vec![PagedPosition {
@@ -303,6 +327,7 @@ mod tests {
             result = Some(Arc::new(View {
                 document: TypstDocument::Paged(Arc::new(doc)),
                 source_fingerprint: Some(format!("{:032x}", tinymist_std::hash::hash128(&inputs))),
+                git_positions: vec![],
             }) as Arc<dyn CompileView>);
         });
         result.unwrap()
@@ -315,7 +340,66 @@ mod tests {
         Arc::new(View {
             document: view.doc().unwrap(),
             source_fingerprint: None,
+            git_positions: vec![],
         })
+    }
+
+    fn with_git(view: &Arc<dyn CompileView>, positions: &[ChangePosition]) -> Arc<dyn CompileView> {
+        Arc::new(View {
+            document: view.doc().unwrap(),
+            source_fingerprint: view.preview_source_fingerprint(),
+            git_positions: positions
+                .iter()
+                .map(|&(page, x, y)| PagedPosition {
+                    page: std::num::NonZeroUsize::new(page).unwrap(),
+                    point: Point::new(Abs::pt(x), Abs::pt(y)),
+                })
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn git_startup_selects_earliest_page_then_top_then_left_and_preserves_saved_position() {
+        let path = path();
+        let view = document("Cover\n#pagebreak()\nBody\n#pagebreak()\nLater");
+        let view = with_git(
+            &view,
+            &[(3, 0., 0.), (2, 0., 80.), (2, 40., 20.), (2, 10., 20.)],
+        );
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        tracker.observe(&view, None);
+        assert_eq!(tracker.position(&hashes(&view)), Some((2, 10., 20.)));
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        let older_git = with_git(&view, &[(1, 0., 0.)]);
+        restarted.observe(&older_git, None);
+        assert_eq!(restarted.position(&hashes(&view)), Some((2, 10., 20.)));
+        let edited = with_git(&document("Cover\n#pagebreak()\nEdited"), &[(1, 0., 0.)]);
+        restarted.observe(&edited, Some(&view));
+        assert_eq!(restarted.position(&hashes(&edited)), Some((2, 12., 34.)));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn git_fallback_handles_empty_and_stale_startup_history() {
+        let path = path();
+        let view = document("Cover\n#pagebreak()\nBody");
+        let tracker = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        tracker.observe(&view, None);
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        let view = with_git(&view, &[(2, 10., 20.)]);
+        restarted.observe(&view, None);
+        assert_eq!(restarted.position(&hashes(&view)), Some((2, 10., 20.)));
+        let stopped_edit = with_git(
+            &document("Edited cover\n#pagebreak()\nBody"),
+            &[(1, 15., 30.)],
+        );
+        let restarted = ChangeTracker::new(path.clone(), "project".into(), "light").unwrap();
+        restarted.observe(&stopped_edit, None);
+        assert_eq!(
+            restarted.position(&hashes(&stopped_edit)),
+            Some((1, 15., 30.))
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -134,7 +134,7 @@ Configured standalone paged preview SHALL persist the last visual edit per proje
 - **WHEN** the service restarts with unchanged paged output
 - **THEN** its last edited position remains available
 - **WHEN** output changed while the service was stopped
-- **THEN** its first compilation establishes a fresh baseline without guessing an edit from the first changed page
+- **THEN** its first compilation establishes a fresh baseline and uses mapped Git candidates if available, without guessing an edit from the first changed page
 - **AND** invalid or different-project records do not cause navigation
 
 #### Scenario: A distant stopped-service edit changes the outline
@@ -170,7 +170,7 @@ Configured standalone paged preview SHALL persist the last visual edit per proje
 
 #### Scenario: No saved history or a palette transition
 - **WHEN** no valid previous snapshot exists
-- **THEN** the first compilation establishes a baseline without guessing an edit
+- **THEN** the first compilation uses mapped Git candidates if available, otherwise establishes a baseline without guessing an edit
 - **WHEN** an existing viewer switches theme with captured reading state
 - **THEN** that reading state takes priority over last-edit restoration
 - **AND** subsequent live source edits still follow their changed locations
@@ -266,3 +266,29 @@ Document preview SHALL offer an accessible web toolbar for a native text range w
 #### Scenario: Highlight helper fails for the selected body
 - **WHEN** a callable document helper fails to compile the proposed highlight, including singleton content or a binding unavailable at the insertion point
 - **THEN** the source remains unchanged and the viewer can still save the selected text for Codex
+
+### Requirement: Git fallback focuses the earliest rendered change
+When startup has no usable saved edit location, the preview SHALL use available Git source changes as initial-focus candidates. It SHALL choose the lowest rendered body page number, then the lowest vertical coordinate and horizontal coordinate on that page. Git ordering SHALL NOT be interpreted as edit chronology.
+
+#### Scenario: Multiple tracked changes
+- **GIVEN** staged and unstaged changes against HEAD in several compiled source files
+- **WHEN** startup needs an initial focus
+- **THEN** their changed source ranges are mapped into the current successful document
+- **AND** the earliest body page wins regardless of filename or patch order
+- **AND** copied outline entries do not displace available authored body positions
+
+#### Scenario: Untracked or unborn source
+- **WHEN** a nonignored new source contributes to the current document, including a repository without a first commit
+- **THEN** its rendered content supplies initial-focus candidates
+- **AND** files outside the current document or project do not supply candidates
+
+#### Scenario: Existing saved edit and later live edits
+- **WHEN** a valid saved edit can be restored
+- **THEN** it takes precedence over older cumulative Git changes
+- **WHEN** a later successful compilation observes a live edit
+- **THEN** normal live-edit navigation applies without consulting Git
+
+#### Scenario: Git cannot supply a mapped candidate
+- **WHEN** Git is absent, fails, exceeds its budget, has no relevant changes, or source differs from the compiled snapshot
+- **THEN** no unsupported Git position is restored
+- **AND** preview rendering continues without changing files, the index or repository history

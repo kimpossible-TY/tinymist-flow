@@ -967,6 +967,12 @@ pub trait CompileView: Send + Sync {
         None
     }
 
+    /// Source-backed Git candidates when startup has no usable edit location.
+    /// The tracker chooses the earliest page, then the topmost position.
+    fn git_changed_document_positions(&self) -> Vec<PagedPosition> {
+        vec![]
+    }
+
     /// Apply a real source highlight to a verified literal preview text range.
     fn highlight_preview_selection(
         &self,

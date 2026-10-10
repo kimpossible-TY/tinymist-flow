@@ -4,6 +4,7 @@ pub use compile::{PreviewCompileView, ProjectPreviewHandler};
 pub use http::{make_http_server, make_theme_http_server, HttpServer};
 
 mod compile;
+mod git;
 mod highlight;
 mod http;
 

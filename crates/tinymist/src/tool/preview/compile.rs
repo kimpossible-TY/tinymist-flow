@@ -12,7 +12,9 @@ use tinymist_preview::{
 };
 use tinymist_project::LspCompiledArtifact;
 use tinymist_query::{jump_from_click, jump_from_cursor};
-use typst::introspection::{MetadataElem, PagedPosition as Position, Tag};
+use typst::introspection::{
+    Location as ElementLocation, MetadataElem, PagedPosition as Position, Tag,
+};
 use typst::layout::{Abs, Frame, FrameItem, Point};
 use typst::model::{Destination, OutlineElem, OutlineEntry};
 use typst::syntax::{FileId, LinkedNode, Source, Span, SyntaxKind, VirtualRoot};
@@ -20,7 +22,9 @@ use typst::World;
 use typst_shim::syntax::LinkedNodeExt;
 
 use crate::project::{LspInterrupt, ProjectClient, ProjectInsId};
-use crate::world::vfs::{notify::MemoryEvent, FileChangeSet};
+use crate::world::vfs::{
+    notify::MemoryEvent, FileChangeSet, WorkspaceResolution, WorkspaceResolver,
+};
 use crate::*;
 
 /// The compiler's view of the a preview task (server).
@@ -382,6 +386,80 @@ impl tinymist_preview::CompileView for PreviewCompileView {
         jump_from_cursor(doc, &source, cursor)
     }
 
+    fn git_changed_document_positions(&self) -> Vec<Position> {
+        let world = self.art.world();
+        let Some(root) = world.entry_state().workspace_root() else {
+            return vec![];
+        };
+        let mut sources = Vec::new();
+        let mut inputs = Vec::new();
+        for id in self.art.depended_files().iter().copied() {
+            // Rooted local files use an internal virtual package namespace.
+            if !matches!(
+                WorkspaceResolver::resolve(id),
+                Ok(WorkspaceResolution::Workspace(_))
+            ) {
+                continue;
+            }
+            let (Ok(source), Ok(path)) = (world.source(id), world.path_for_id(id)) else {
+                continue;
+            };
+            let Ok(path) = path.to_err() else {
+                continue;
+            };
+            inputs.push((path.to_path_buf(), source.text().to_string()));
+            sources.push(source);
+        }
+        let Some(changes) = super::git::changed_ranges(root.as_ref(), &inputs) else {
+            return vec![];
+        };
+        let mut edits = SourceEdits::default();
+        for (index, ranges) in changes {
+            for range in ranges {
+                let node = LinkedNode::new(sources[index].root());
+                if has_edit_content(&node, &range) {
+                    collect_edit_spans(node, &range, &mut edits.spans);
+                }
+            }
+        }
+        if edits.spans.is_empty() {
+            return vec![];
+        }
+        let Some(TypstDocument::Paged(document)) = self.doc() else {
+            return vec![];
+        };
+        let mut body = Vec::new();
+        let mut links = Vec::new();
+        let mut outlines = HashSet::new();
+        for (index, page) in document.pages().iter().enumerate() {
+            let mut candidates = PageEditPositions {
+                earliest: true,
+                outlines: std::mem::take(&mut outlines),
+                ..Default::default()
+            };
+            find_edit_positions(
+                &page.frame,
+                Point::zero(),
+                &page.frame,
+                &edits,
+                &mut candidates,
+            );
+            outlines = std::mem::take(&mut candidates.outlines);
+            let page = NonZeroUsize::new(index + 1).unwrap();
+            for point in [candidates.element, candidates.text].into_iter().flatten() {
+                body.push(Position { page, point });
+            }
+            if let Some(point) = candidates.link {
+                links.push(Position { page, point });
+            }
+        }
+        if body.is_empty() {
+            links
+        } else {
+            body
+        }
+    }
+
     fn changed_document_positions(
         &self,
         previous: &dyn tinymist_preview::CompileView,
@@ -584,11 +662,31 @@ fn collect_edit_spans(node: LinkedNode<'_>, range: &Range<usize>, spans: &mut Ha
     }
 }
 
+fn has_edit_content(node: &LinkedNode<'_>, range: &Range<usize>) -> bool {
+    let bounds = node.range();
+    bounds.start < range.end
+        && range.start < bounds.end
+        && !node.kind().is_trivia()
+        && (node.children().next().is_none()
+            || node.children().any(|child| has_edit_content(&child, range)))
+}
+
 #[derive(Default)]
 struct PageEditPositions {
+    earliest: bool,
+    // Copied outline text can extend beyond its link rectangle. Track its
+    // semantic boundaries across nested frames and pages for Git ordering.
+    outlines: HashSet<ElementLocation>,
     element: Option<Point>,
     text: Option<Point>,
     link: Option<Point>,
+}
+
+fn record_edit_point(slot: &mut Option<Point>, point: Point, earliest: bool) {
+    if slot.is_none_or(|old| earliest && (point.y < old.y || (point.y == old.y && point.x < old.x)))
+    {
+        *slot = Some(point);
+    }
 }
 
 fn find_edit_positions(
@@ -606,33 +704,50 @@ fn find_edit_positions(
                 find_edit_positions(&group.frame, point, page, edits, positions);
             }
             FrameItem::Tag(Tag::Start(elem, _))
-                if positions.element.is_none()
+                if positions.earliest
+                    && (elem.is::<OutlineElem>() || elem.is::<OutlineEntry>()) =>
+            {
+                if let Some(location) = elem.location() {
+                    positions.outlines.insert(location);
+                }
+            }
+            FrameItem::Tag(Tag::End(location, ..)) if positions.earliest => {
+                positions.outlines.remove(location);
+            }
+            FrameItem::Tag(Tag::Start(elem, _))
+                if (positions.earliest || positions.element.is_none())
                     && !elem.is::<OutlineElem>()
                     && !elem.is::<OutlineEntry>()
                     && edits.contains(elem.span()) =>
             {
-                positions.element = Some(point);
+                if positions.outlines.is_empty() {
+                    record_edit_point(&mut positions.element, point, positions.earliest);
+                } else {
+                    record_edit_point(&mut positions.link, point, positions.earliest);
+                }
             }
-            FrameItem::Text(text) if positions.text.is_none() => {
+            FrameItem::Text(text) if positions.earliest || positions.text.is_none() => {
                 for glyph in &text.glyphs {
                     if edits.contains(glyph.span.0) {
-                        if internal_link_at(page, point) {
-                            positions.link.get_or_insert(point);
+                        if !positions.outlines.is_empty() || internal_link_at(page, point) {
+                            record_edit_point(&mut positions.link, point, positions.earliest);
                         } else {
-                            positions.text = Some(point);
-                            break;
+                            record_edit_point(&mut positions.text, point, positions.earliest);
+                            if !positions.earliest {
+                                break;
+                            }
                         }
                     }
                     point.x += glyph.x_advance.at(text.size);
                 }
             }
             FrameItem::Shape(_, span) | FrameItem::Image(_, _, span)
-                if positions.text.is_none() && edits.contains(*span) =>
+                if (positions.earliest || positions.text.is_none()) && edits.contains(*span) =>
             {
-                if internal_link_at(page, point) {
-                    positions.link.get_or_insert(point);
+                if !positions.outlines.is_empty() || internal_link_at(page, point) {
+                    record_edit_point(&mut positions.link, point, positions.earliest);
                 } else {
-                    positions.text = Some(point);
+                    record_edit_point(&mut positions.text, point, positions.earliest);
                 }
             }
             _ => {}
@@ -707,6 +822,18 @@ mod tests {
 
     fn pt(x: f64, y: f64) -> Point {
         Point::new(Abs::pt(x), Abs::pt(y))
+    }
+
+    #[test]
+    fn git_points_use_visual_order_and_comment_only_hunks_have_no_content() {
+        let mut point = None;
+        record_edit_point(&mut point, pt(10., 80.), true);
+        record_edit_point(&mut point, pt(40., 20.), true);
+        record_edit_point(&mut point, pt(10., 20.), true);
+        assert_eq!(point, Some(pt(10., 20.)));
+        let source = Source::detached("// comment\nBody");
+        assert!(!has_edit_content(&LinkedNode::new(source.root()), &(0..11)));
+        assert!(has_edit_content(&LinkedNode::new(source.root()), &(11..15)));
     }
 
     #[test]
